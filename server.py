@@ -11,7 +11,6 @@ OUTPUT_DEVICE = 14
 
 SAMPLE_RATE = 44100
 CHANNELS = 1
-RECORD_SECONDS = 5
 
 load_dotenv()
 
@@ -47,23 +46,81 @@ class CallServer:
 
     def receive_audio(self, call):
 
-        print()
-        print("Caller is speaking...")
-        print(f"Recording {RECORD_SECONDS} seconds...")
+        print("Listening...")
 
-        recording = sd.rec(
-            int(RECORD_SECONDS * SAMPLE_RATE),
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="float32",
-            device=INPUT_DEVICE
-        )
+        block_duration = 0.1
 
-        sd.wait()
+        silence_threshold = 0.015
+        silence_duration = 0.8
 
-        print("Caller finished speaking.")
+        warmup_duration = 0.5
+        pre_buffer_duration = 0.4
 
-        return recording
+        warmup_blocks = int(warmup_duration / block_duration)
+        pre_buffer_blocks = int(pre_buffer_duration / block_duration)
+
+        blocks_read = 0
+
+        audio_blocks = []
+        pre_buffer = []
+
+        speech_started = False
+        silence_time = 0.0
+
+        def callback(indata, frames, time, status):
+
+            nonlocal speech_started
+            nonlocal silence_time
+            nonlocal blocks_read
+            nonlocal pre_buffer
+
+            audio = indata.copy()
+
+            level = np.sqrt(np.mean(audio ** 2))
+
+            blocks_read += 1
+
+            # Ignore microphone startup transient
+            if blocks_read <= warmup_blocks:
+                return
+
+            # Keep a small amount of audio before speech detection
+            if not speech_started:
+
+                pre_buffer.append(audio)
+
+                if len(pre_buffer) > pre_buffer_blocks:
+                    pre_buffer.pop(0)
+
+                if level > silence_threshold:
+                    speech_started = True
+
+                    # Include audio immediately before detection
+                    audio_blocks.extend(pre_buffer)
+
+                    print("Speech detected...")
+
+            else:
+
+                audio_blocks.append(audio)
+
+                if level < silence_threshold:
+                    silence_time += block_duration
+                else:
+                    silence_time = 0.0
+
+        with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS, dtype="float32", device=INPUT_DEVICE,
+                blocksize=int(SAMPLE_RATE * block_duration), callback=callback):
+
+            while not speech_started:
+                sd.sleep(100)
+
+            while silence_time < silence_duration:
+                sd.sleep(100)
+
+        print("Speech finished.")
+
+        return np.concatenate(audio_blocks)
 
     def speech_to_text(self, audio):
         filename = "caller.wav"
@@ -84,49 +141,84 @@ class CallServer:
     def ask_ai(self, call, message):
 
         call.messages.append({
-            "role": "caller",
-            "message": message
+            "role": "user",
+            "content": message
+        })
+
+        messages = [{"role": "system", "content": ("You are a professional and friendly telephone secretary. "
+                                                   "Answer the caller naturally and concisely. "
+                                                   "Keep responses short because they will be spoken aloud.")}]
+
+        messages.extend(call.messages)
+
+        response = client.chat.completions.create(
+            model="gpt-5-mini",
+            messages=messages
+        )
+
+        answer = response.choices[0].message.content
+
+        call.messages.append({
+            "role": "assistant",
+            "content": answer
         })
 
         print()
         print("Caller:", message)
-
-        # Temporary mock AI
-
-        answer = "Hello! Certainly. What day would you like the appointment?"
-
-        call.messages.append({
-            "role": "assistant",
-            "message": answer
-        })
-
         print("AI:", answer)
 
         return answer
 
     def text_to_speech(self, text):
-
-        # Temporary test.
-        # We don't have TTS yet.
+        filename = "ai_response.wav"
 
         print()
-        print("AI would now speak:")
-        print(text)
+        print("Generating AI speech...")
+
+        response = client.audio.speech.create(model="gpt-4o-mini-tts", voice="coral", input=text)
+
+        response.write_to_file(filename)
+
+        print("Playing AI response...")
+
+        data, samplerate = sf.read(filename, dtype="float32")
+
+        sd.play(data, samplerate=samplerate, device=OUTPUT_DEVICE)
+
+        sd.wait()
+
+        print("AI finished speaking.")
 
     def handle_call(self):
 
         call = self.receive_call()
 
-        audio = self.receive_audio(call)
+        while True:
 
-        message = self.speech_to_text(audio)
+            print()
+            print("Caller is speaking...")
+            print("Say 'hangup' when you want to end the simulated call.")
 
-        answer = self.ask_ai(call, message)
+            audio = self.receive_audio(call)
 
-        self.text_to_speech(answer)
+            message = self.speech_to_text(audio)
+
+            print()
+            print("Caller:", message)
+
+            # Temporary hangup detection
+            if "hang up" in message.lower() or "hangup" in message.lower():
+                print()
+                print("Caller hung up.")
+                break
+
+            answer = self.ask_ai(call, message)
+
+            self.text_to_speech(answer)
 
         print()
         print("Call finished.")
+        print("Call ID:", call.call_id)
 
 
 server = CallServer()
