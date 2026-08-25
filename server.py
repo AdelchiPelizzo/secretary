@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 import uuid
 import threading
 
+from secretary.Call import Call
+
 INPUT_DEVICE = 1
 OUTPUT_DEVICE = 5
 
@@ -17,26 +19,6 @@ load_dotenv()
 print(sd.query_devices())
 
 client = OpenAI()
-
-class Call:
-
-    def __init__(self, call_id, caller_number=None, called_number=None):
-        self.call_id = call_id
-        self.caller_number = caller_number
-        self.called_number = called_number
-        self.language = None
-        self.messages = []
-
-        # Appointment currently being collected
-        self.appointment = {
-            "title": None,
-            "date": None,
-            "time": None,
-            "duration_minutes": None
-        }
-
-        self.appointment_status = "NONE"
-
 
 class CallServer:
 
