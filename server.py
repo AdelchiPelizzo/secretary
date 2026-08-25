@@ -6,7 +6,8 @@ from dotenv import load_dotenv
 import uuid
 import threading
 
-from secretary.Call import Call
+from secretary.call import Call
+from secretary.audio import receive_audio
 
 INPUT_DEVICE = 1
 OUTPUT_DEVICE = 5
@@ -40,102 +41,6 @@ class CallServer:
         print("================================")
 
         return call
-
-    def receive_audio(self, call):
-
-        print("Listening...")
-
-        block_duration = 0.1
-
-        silence_threshold = 0.015
-        silence_duration = 0.8
-        speech_start_duration = 0.2
-
-        warmup_duration = 0.5
-        pre_buffer_duration = 0.4
-
-        warmup_blocks = int(warmup_duration / block_duration)
-        pre_buffer_blocks = int(pre_buffer_duration / block_duration)
-
-        blocks_read = 0
-
-        audio_blocks = []
-        pre_buffer = []
-
-        speech_started = False
-        speech_time = 0.0
-        silence_time = 0.0
-
-        def callback(indata, frames, time, status):
-
-            nonlocal speech_started
-            nonlocal speech_time
-            nonlocal silence_time
-            nonlocal blocks_read
-            nonlocal pre_buffer
-
-            audio = indata.copy()
-
-            level = np.sqrt(np.mean(audio ** 2))
-
-            blocks_read += 1
-
-            # Ignore microphone startup transient
-            if blocks_read <= warmup_blocks:
-                return
-
-            # Before speech starts
-            if not speech_started:
-
-                # Keep a small amount of audio before speech detection
-                pre_buffer.append(audio)
-
-                if len(pre_buffer) > pre_buffer_blocks:
-                    pre_buffer.pop(0)
-
-                if level > silence_threshold:
-
-                    speech_time += block_duration
-
-                    # Require the sound to remain above the threshold
-                    # for a short period before declaring speech
-                    if speech_time >= speech_start_duration:
-                        speech_started = True
-
-                        # Include audio immediately before detection
-                        audio_blocks.extend(pre_buffer)
-
-                        print("Speech detected...")
-
-                else:
-
-                    speech_time = 0.0
-
-            # After speech has started
-            else:
-
-                audio_blocks.append(audio)
-
-                if level < silence_threshold:
-
-                    silence_time += block_duration
-
-                else:
-
-                    silence_time = 0.0
-
-        with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS, dtype="float32", device=INPUT_DEVICE,
-                blocksize=int(SAMPLE_RATE * block_duration), callback=callback):
-
-            while not speech_started:
-                sd.sleep(100)
-
-            while silence_time < silence_duration:
-                sd.sleep(100)
-
-        print("Speech finished.")
-
-        return np.concatenate(audio_blocks)
 
     def speech_to_text(self, audio):
         filename = "caller.wav"
@@ -394,7 +299,7 @@ class CallServer:
                 print("Caller is speaking...")
                 print("Say 'hangup' when you want to end the simulated call.")
 
-                audio = self.receive_audio(call)
+                audio = receive_audio()
 
                 message = self.speech_to_text(audio)
                 if not message.strip():
