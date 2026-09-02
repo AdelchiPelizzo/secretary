@@ -1,7 +1,6 @@
-.venv*/
 .env
-.idea/
+*.wav
 __pycache__/
 *.pyc
-caller.wav
-ai_response.wav
+.venv/
+.idea/

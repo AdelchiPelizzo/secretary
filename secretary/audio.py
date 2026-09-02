@@ -3,8 +3,8 @@ import numpy as np
 
 
 SAMPLE_RATE = 44100
-CHANNELS = 1
-INPUT_DEVICE = 10
+CHANNELS = 2
+INPUT_DEVICE = 17
 
 
 def receive_audio():
@@ -90,3 +90,7 @@ def receive_audio():
     print("Speech finished.")
 
     return np.concatenate(audio_blocks)
+
+
+if __name__ == "__main__":
+    receive_audio()

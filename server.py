@@ -1,14 +1,17 @@
-import sounddevice as sd
-import soundfile as sf
-import numpy as np
-from openai import OpenAI
-from dotenv import load_dotenv
+import os
 import uuid
 import threading
+import time
+
+import numpy as np
+import soundfile as sf
+
+from openai import OpenAI
+from dotenv import load_dotenv
 
 from secretary.call import Call
-from secretary.audio import receive_audio
 from secretary.ai_service import speech_to_text, ask_ai
+from secretary.sip import SipServer
 
 INPUT_DEVICE = 1
 OUTPUT_DEVICE = 5
@@ -18,20 +21,32 @@ CHANNELS = 1
 
 load_dotenv()
 
-print(sd.query_devices())
-
 client = OpenAI()
 
 class CallServer:
 
     def __init__(self):
-        self.calls = {}
 
-    def receive_call(self, caller_number=None, called_number=None):
+        self.calls = {}
+        self.active_call = None
+
+        self.sip_server = "sip.vivavox.it"
+        self.username = os.getenv("VIVAVOX_USERNAME")
+        self.password = os.getenv("VIVAVOX_PASSWORD")
+
+    def receive_call(
+        self,
+        caller_number=None,
+        called_number=None
+    ):
 
         call_id = str(uuid.uuid4())
 
-        call = Call(call_id, caller_number, called_number)
+        call = Call(
+            call_id,
+            caller_number,
+            called_number
+        )
 
         self.calls[call_id] = call
 
@@ -55,119 +70,285 @@ class CallServer:
         print("Duration:", appointment["duration_minutes"])
         print("=========================")
 
-    def text_to_speech(self, text):
+    def resample(self, audio, source_rate, target_rate):
+
+        if source_rate == target_rate:
+            return audio
+
+        duration = len(audio) / source_rate
+
+        new_length = int(
+            duration * target_rate
+        )
+
+        old_indices = np.arange(len(audio))
+
+        new_indices = np.linspace(
+            0,
+            len(audio) - 1,
+            new_length
+        )
+
+        return np.interp(
+            new_indices,
+            old_indices,
+            audio
+        ).astype(np.float32)
+
+    def wait_for_speech(self, audio_port):
+
+        print()
+        print("[AUDIO] Waiting for caller speech...")
+
+        chunks = []
+        speech_started = False
+        silence_frames = 0
+
+        # 8 kHz / 20 ms
+        max_silence_frames = 35
+
+        while True:
+
+            data = audio_port.input_queue.get()
+
+            audio = np.frombuffer(
+                data,
+                dtype=np.int16
+            )
+
+            if len(audio) == 0:
+                continue
+
+            rms = np.sqrt(
+                np.mean(
+                    audio.astype(np.float32) ** 2
+                )
+            )
+
+            # Basic speech detector.
+            is_speech = rms > 500
+
+            if is_speech:
+
+                speech_started = True
+                silence_frames = 0
+                chunks.append(data)
+
+            elif speech_started:
+
+                chunks.append(data)
+
+                silence_frames += 1
+
+                if silence_frames >= max_silence_frames:
+
+                    break
+
+        if not chunks:
+            return None
+
+        raw_audio = b"".join(chunks)
+
+        audio = np.frombuffer(
+            raw_audio,
+            dtype=np.int16
+        ).astype(np.float32) / 32768.0
+
+        # Your existing STT function expects 44.1 kHz.
+        audio = self.resample(
+            audio,
+            8000,
+            44100
+        )
+
+        return audio
+
+    def text_to_speech_to_sip(
+        self,
+        text,
+        audio_port
+    ):
+
         filename = "ai_response.wav"
 
         print()
-        print("Generating AI speech...")
+        print("[TTS] Generating AI speech...")
 
-        response = client.audio.speech.create(model="gpt-4o-mini-tts", voice="coral", input=text)
+        response = client.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice="coral",
+            input=text
+        )
 
         response.write_to_file(filename)
 
-        print("Playing AI response...")
+        data, samplerate = sf.read(
+            filename,
+            dtype="float32"
+        )
 
-        data, samplerate = sf.read(filename, dtype="float32")
+        # Make mono.
+        if data.ndim > 1:
+            data = np.mean(
+                data,
+                axis=1
+            )
 
-        print("TTS sample rate:", samplerate)
+        # Convert OpenAI TTS sample rate to SIP rate.
+        data = self.resample(
+            data,
+            samplerate,
+            8000
+        )
 
-        output_info = sd.query_devices(OUTPUT_DEVICE)
-        output_samplerate = int(output_info["default_samplerate"])
+        # Convert float32 [-1,1] to int16.
+        data = np.clip(
+            data,
+            -1.0,
+            1.0
+        )
 
-        print("Output device:", OUTPUT_DEVICE)
-        print("Output device sample rate:", output_samplerate)
+        pcm = (
+            data * 32767
+        ).astype(np.int16)
 
-        if samplerate != output_samplerate:
-            print(f"Resampling audio: "
-                  f"{samplerate} Hz -> {output_samplerate} Hz")
+        raw = pcm.tobytes()
 
-            duration = len(data) / samplerate
-            new_length = int(duration * output_samplerate)
+        print("[TTS] Sending speech to caller...")
 
-            old_indices = np.arange(len(data))
-            new_indices = np.linspace(0, len(data) - 1, new_length)
+        # Feed 20 ms chunks into PJSIP.
+        for position in range(
+            0,
+            len(raw),
+            320 * 2
+        ):
 
-            data = np.interp(new_indices, old_indices, data).astype(np.float32)
+            chunk = raw[
+                position:
+                position + 320 * 2
+            ]
 
-            samplerate = output_samplerate
+            audio_port.output_queue.put(
+                chunk
+            )
 
-        sd.play(data, samplerate=samplerate, device=OUTPUT_DEVICE)
+        # Wait until all generated audio has been consumed.
+        while not audio_port.output_queue.empty():
+            time.sleep(0.02)
 
-        sd.wait()
+        print("[TTS] AI finished speaking.")
 
-        # Give the microphone a moment to settle after AI playback
-        sd.sleep(400)
+    def process_call(self, sip_call):
 
-        print("AI finished speaking.")
+        app_call = sip_call.app_call
+        audio_port = sip_call.audio_port
 
-    def handle_call(self):
-
-        call = None
+        print()
+        print("[AI] Call processing started.")
 
         try:
-            call = self.receive_call()
 
             while True:
 
-                print()
-                print("Caller is speaking...")
-                print("Say 'hangup' when you want to end the simulated call.")
+                # Wait for caller to speak.
+                audio = self.wait_for_speech(
+                    audio_port
+                )
 
-                audio = receive_audio()
+                if audio is None:
+                    continue
 
-                message = speech_to_text(audio)
-                if not message.strip():
-                    print("No speech detected by transcription.")
+                print(
+                    "[STT] Transcribing caller..."
+                )
+
+                message = speech_to_text(
+                    audio
+                )
+
+                message = message.strip()
+
+                if not message:
+                    print(
+                        "[STT] No speech detected."
+                    )
                     continue
 
                 print()
                 print("Caller:", message)
 
-                if "hang up" in message.lower() or "hangup" in message.lower():
-                    print()
-                    print("Caller hung up.")
+                if (
+                    "hang up" in message.lower()
+                    or
+                    "hangup" in message.lower()
+                ):
+
+                    print(
+                        "[SIP] Caller requested hangup."
+                    )
+
                     break
 
-                action, answer = ask_ai(call, message)
+                action, answer = ask_ai(
+                    app_call,
+                    message
+                )
 
                 if action == "APPOINTMENT_CONFIRMED":
-                    self.create_appointment(call)
+                    self.create_appointment(
+                        app_call
+                    )
 
-                self.text_to_speech(answer)
-
+                self.text_to_speech_to_sip(
+                    answer,
+                    audio_port
+                )
 
         except Exception as e:
 
             print()
-            print("Call error:", e)
+            print("[AI] Call processing error:")
+            print(type(e).__name__, e)
 
         finally:
 
-            if call is not None:
-                print()
-                print("Call finished.")
-                print("Call ID:", call.call_id)
+            print()
+            print("[AI] Call processing finished.")
 
+
+load_dotenv()
+
+client = OpenAI()
 
 server = CallServer()
+sip = SipServer(server)
 
-print("================================")
-print("AI SECRETARY SERVER")
-print("================================")
-print()
-print("Type 'call' to simulate an incoming call.")
-print("Type 'quit' to stop.")
+try:
+    sip.start()
 
-while True:
+    print()
+    print("================================")
+    print("AI SECRETARY SERVER")
+    print("================================")
+    print()
+    print("SIP service running.")
+    print("Call your VivaVox number to test.")
+    print("Press CTRL+C to stop.")
+    print()
 
-    command = input("\n> ")
+    while True:
+        sip.ep.libHandleEvents(50)
+        time.sleep(0.01)
 
-    if command.lower() == "quit":
-        break
+except KeyboardInterrupt:
+    print()
+    print("Stopping...")
 
-    if command.lower() == "call":
-        thread = threading.Thread(
-            target=server.handle_call
-        )
+except Exception as e:
+    print()
+    print("SERVER ERROR:")
+    print(type(e).__name__, e)
 
-        thread.start()
+finally:
+    sip.stop()
+

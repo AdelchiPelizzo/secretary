@@ -1,159 +1,154 @@
 import os
 import time
-from pathlib import Path
 
-import pjsua2 as pj
+from secretary import pjsua2 as pj
 from dotenv import load_dotenv
 
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-ENV_FILE = BASE_DIR / ".env"
-
-print(f"[SIP] Loading .env from: {ENV_FILE}")
-load_dotenv(ENV_FILE)
-
-NUMBER = os.getenv("VIVAVOX_NUMBER")
-USERNAME = os.getenv("VIVAVOX_USERNAME")
-PASSWORD = os.getenv("VIVAVOX_PASSWORD")
 
 SERVER = "sip.vivavox.it"
 PORT = 5060
 
 
-ep = None
-acc = None
+class SecretaryCall(pj.Call):
+
+    def __init__(self, account, call_id):
+        super().__init__(account, call_id)
+
+    def onCallState(self, prm):
+        ci = self.getInfo()
+
+        print()
+        print("[SIP] Call state:", ci.stateText)
+
+        if ci.state == pj.PJSIP_INV_STATE_DISCONNECTED:
+            print("[SIP] Call disconnected.")
 
 
-try:
-    print()
-    print("[SIP] =========================================")
-    print("[SIP] Secretary SIP service")
-    print("[SIP] =========================================")
-    print(f"[SIP] Number   : {NUMBER}")
-    print(f"[SIP] Username : {USERNAME}")
-    print(f"[SIP] Server   : {SERVER}:{PORT}")
+class SecretaryAccount(pj.Account):
 
-    # --------------------------------------------------
-    # Endpoint
-    # --------------------------------------------------
+    def __init__(self):
+        super().__init__()
+        self.active_calls = {}
 
-    print("[SIP] Creating PJSIP endpoint...")
+    def onIncomingCall(self, prm):
 
-    ep = pj.Endpoint()
-    ep.libCreate()
-    ep.libInit(pj.EpConfig())
+        print()
+        print("================================")
+        print("[SIP] INCOMING CALL")
+        print("================================")
+        print("[SIP] Call ID:", prm.callId)
 
-    print("[SIP] Endpoint created.")
+        call = SecretaryCall(self, prm.callId)
 
-    # --------------------------------------------------
-    # UDP transport
-    # --------------------------------------------------
+        self.active_calls[prm.callId] = call
 
-    print("[SIP] Creating UDP transport...")
+        answer = pj.CallOpParam()
+        answer.statusCode = 200
 
-    tc = pj.TransportConfig()
-    tc.port = PORT
+        call.answer(answer)
 
-    ep.transportCreate(
-        pj.PJSIP_TRANSPORT_UDP,
-        tc
-    )
+        print("[SIP] CALL ANSWERED")
 
-    print("[SIP] UDP transport created.")
 
-    # --------------------------------------------------
-    # Start
-    # --------------------------------------------------
+class SipServer:
 
-    ep.libStart()
+    def __init__(self, server):
 
-    print("[SIP] PJSIP started.")
+        self.server = server
 
-    # --------------------------------------------------
-    # Account
-    # --------------------------------------------------
+        load_dotenv()
 
-    print("[SIP] Creating Vivavox account...")
+        self.username = os.getenv("VIVAVOX_USERNAME")
+        self.password = os.getenv("VIVAVOX_PASSWORD")
+        self.number = os.getenv("VIVAVOX_NUMBER")
 
-    ac = pj.AccountConfig()
+        self.ep = None
+        self.acc = None
 
-    ac.idUri = f"sip:{USERNAME}@{SERVER}"
+    def start(self):
 
-    ac.regConfig.registrarUri = (
-        f"sip:{SERVER}:{PORT}"
-    )
+        print()
+        print("=========================================")
+        print("[SIP] Starting PJSIP")
+        print("=========================================")
 
-    cred = pj.AuthCredInfo(
-        "digest",
-        "*",
-        USERNAME,
-        0,
-        PASSWORD
-    )
+        self.ep = pj.Endpoint()
 
-    ac.sipConfig.authCreds.append(cred)
+        self.ep.libCreate()
 
-    print("[SIP] SIP authentication configured.")
+        ep_cfg = pj.EpConfig()
 
-    # IMPORTANT:
-    # Use plain pj.Account(), exactly like the successful
-    # 30-second test.
-    acc = pj.Account()
-    acc.create(ac)
+        # Important:
+        # Let Python explicitly drive PJSIP events.
+        ep_cfg.uaConfig.threadCnt = 0
 
-    print("[SIP] Account created.")
+        self.ep.libInit(ep_cfg)
 
-    print()
-    print("[SIP] =========================================")
-    print("[SIP] SIP SERVICE RUNNING")
-    print("[SIP] =========================================")
-    print("[SIP] Waiting for Vivavox registration...")
-    print("[SIP] Call 0873210201 to test.")
-    print("[SIP] Press CTRL+C to stop.")
-    print()
+        transport_cfg = pj.TransportConfig()
+        transport_cfg.port = PORT
 
-    # --------------------------------------------------
-    # Keep Python alive forever.
-    # --------------------------------------------------
+        self.ep.transportCreate(
+            pj.PJSIP_TRANSPORT_UDP,
+            transport_cfg
+        )
 
-    while True:
-        time.sleep(1)
+        self.ep.libStart()
+
+        print("[SIP] PJSIP started.")
+
+        account_cfg = pj.AccountConfig()
+
+        account_cfg.idUri = (
+            f"sip:{self.username}@{SERVER}"
+        )
+
+        account_cfg.regConfig.registrarUri = (
+            f"sip:{SERVER}:{PORT}"
+        )
+
+        credentials = pj.AuthCredInfo(
+            "digest",
+            "*",
+            self.username,
+            0,
+            self.password
+        )
+
+        account_cfg.sipConfig.authCreds.append(
+            credentials
+        )
+
+        self.acc = SecretaryAccount()
+
+        self.acc.create(account_cfg)
+
+        print("[SIP] Account created.")
+        print("[SIP] Waiting for registration...")
+
+    def run(self):
 
         try:
-            info = acc.getInfo()
 
-            print(
-                f"\r[SIP] Registration: "
-                f"{info.regStatus} {info.regStatusText}",
-                end="",
-                flush=True
-            )
+            while True:
 
-        except Exception as e:
+                # Explicitly process PJSIP events.
+                self.ep.libHandleEvents(50)
+
+                time.sleep(0.01)
+
+        except KeyboardInterrupt:
+
             print()
-            print(f"[SIP] Status error: {e}")
+            print("[SIP] Stopping...")
 
-except KeyboardInterrupt:
-    print()
-    print("[SIP] Stopping...")
+    def stop(self):
 
-except Exception as e:
-    print()
-    print(f"[SIP] Python exception: {type(e).__name__}: {e}")
+        print("[SIP] Shutting down.")
 
-finally:
-    print("[SIP] Cleaning up...")
+        if self.acc:
+            self.acc.shutdown()
+            self.acc = None
 
-    try:
-        if acc is not None:
-            acc.shutdown()
-    except Exception as e:
-        print(f"[SIP] Account cleanup: {e}")
-
-    try:
-        if ep is not None:
-            ep.libDestroy()
-    except Exception as e:
-        print(f"[SIP] Endpoint cleanup: {e}")
-
-    print("[SIP] Stopped.")
+        if self.ep:
+            self.ep.libDestroy()
+            self.ep = None

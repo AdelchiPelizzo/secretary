@@ -5973,11 +5973,6 @@ class Account(object):
         return _pjsua2.Account_findBuddy2(self, uri)
 
     def onIncomingCall(self, prm):
-        print()
-        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        print("!!! onIncomingCall WAS TRIGGERED !!!")
-        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        print(f"callId = {prm.callId}")
         return _pjsua2.Account_onIncomingCall(self, prm)
 
     def onRegStarted(self, prm):
@@ -7639,3 +7634,4 @@ class Endpoint(object):
 
 # Register Endpoint in _pjsua2:
 _pjsua2.Endpoint_swigregister(Endpoint)
+
