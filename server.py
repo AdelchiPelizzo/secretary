@@ -187,6 +187,9 @@ class CallServer:
             dtype="float32"
         )
 
+        print("[TTS] Original samplerate:", samplerate)
+        print("[TTS] Original samples:", len(data))
+
         # Make mono.
         if data.ndim > 1:
             data = np.mean(
@@ -215,6 +218,9 @@ class CallServer:
         raw = pcm.tobytes()
 
         print("[TTS] Sending speech to caller...")
+
+        print("[TTS] PCM samples:", len(pcm))
+        print("[TTS] PCM peak:", np.max(np.abs(pcm)))
 
         # Feed 20 ms chunks into PJSIP.
         for position in range(
@@ -321,10 +327,10 @@ load_dotenv()
 client = OpenAI()
 
 server = CallServer()
-sip = SipServer(server)
+server.sip = SipServer(server)
 
 try:
-    sip.start()
+    server.sip.start()
 
     print()
     print("================================")
@@ -337,7 +343,7 @@ try:
     print()
 
     while True:
-        sip.ep.libHandleEvents(50)
+        server.sip.ep.libHandleEvents(50)
         time.sleep(0.01)
 
 except KeyboardInterrupt:
@@ -350,5 +356,5 @@ except Exception as e:
     print(type(e).__name__, e)
 
 finally:
-    sip.stop()
+    server.sip.stop()
 

@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 
 from secretary import pjsua2 as pj
@@ -11,23 +12,88 @@ PORT = 5060
 
 class SecretaryCall(pj.Call):
 
-    def __init__(self, account, call_id):
+    def __init__(self, account, call_id, app_call):
         super().__init__(account, call_id)
 
+        self.account = account
+        self.app_call = app_call
+        self.audio_port = app_call.audio_port
+
     def onCallState(self, prm):
+
         ci = self.getInfo()
+
+        if ci.state == pj.PJSIP_INV_STATE_CONFIRMED:
+            ti = self.getMedTransportInfo(0)
+            print("[SIP] local RTP:", ti.localRtpName)
+            print("[SIP] local RTCP:", ti.localRtcpName)
+            print("[SIP] source RTP:", ti.srcRtpName)
+            print("[SIP] source RTCP:", ti.srcRtcpName)
+
+            si = self.getStreamInfo(0)
+
+            print("[SIP] codec:", si.codecName)
+            print("[SIP] clock rate:", si.codecClockRate)
+            print("[SIP] direction:", si.dir)
+            print("[SIP] remote RTP:", si.remoteRtpAddress)
+            print("[SIP] remote RTCP:", si.remoteRtcpAddress)
+            print("[SIP] RX payload:", si.rxPt)
+            print("[SIP] TX payload:", si.txPt)
+
+            if ci.state == pj.PJSIP_INV_STATE_CONFIRMED:
+                am = self.getAudioMedia(0)
+                print("[SIP] Audio port ID:", am.getPortId())
+                pi = am.getPortInfo()
+                print("[SIP] ConfPortInfo fields:", dir(pi))
 
         print()
         print("[SIP] Call state:", ci.stateText)
 
         if ci.state == pj.PJSIP_INV_STATE_DISCONNECTED:
+
+            if hasattr(self, "audio_port"):
+                self.audio_port.stop()
+
             print("[SIP] Call disconnected.")
+
+    def onCallMediaState(self, prm):
+        ci = self.getInfo()
+
+        for mi in ci.media:
+            if mi.type == pj.PJMEDIA_TYPE_AUDIO:
+                if mi.status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+                    audio_media = self.getAudioMedia(mi.index)
+
+                    print("[SIP] Connecting call audio to sound device...")
+
+                    print("[DEBUG] account.server:", self.account.server)
+                    print("[DEBUG] account.server type:", type(self.account.server))
+
+                    print("[SIP] BEFORE call -> playback")
+
+                    print("[DEBUG] sip_server:", self.account.server.sip_server)
+                    print("[DEBUG] sip_server type:", type(self.account.server.sip_server))
+
+                    audio_media.startTransmit(
+                        self.account.server.sip.ep.audDevManager().getPlaybackDevMedia()
+                    )
+
+                    print("[SIP] AFTER call -> playback")
+
+                    # Leave capture connection commented out for this test
+                    self.account.server.sip.ep.audDevManager().getCaptureDevMedia().startTransmit(audio_media)
+
+                    print("[SIP] Audio media port:", audio_media.getPortId())
+                    print("[SIP] Audio media info:", audio_media.getPortInfo())
 
 
 class SecretaryAccount(pj.Account):
 
-    def __init__(self):
+    def __init__(self, server):
+
         super().__init__()
+
+        self.server = server
         self.active_calls = {}
 
     def onIncomingCall(self, prm):
@@ -36,16 +102,29 @@ class SecretaryAccount(pj.Account):
         print("================================")
         print("[SIP] INCOMING CALL")
         print("================================")
-        print("[SIP] Call ID:", prm.callId)
 
-        call = SecretaryCall(self, prm.callId)
+        print(
+            "[SIP] Call ID:",
+            prm.callId
+        )
 
-        self.active_calls[prm.callId] = call
+        app_call = self.server.receive_call()
+
+        call = SecretaryCall(self, prm.callId, app_call)
+
+        self.active_calls[
+            prm.callId
+        ] = call
 
         answer = pj.CallOpParam()
+
         answer.statusCode = 200
 
         call.answer(answer)
+
+        call.audio_port.start()
+
+        threading.Thread(target=self.server.process_call, args=(call,), daemon=True).start()
 
         print("[SIP] CALL ANSWERED")
 
@@ -58,9 +137,17 @@ class SipServer:
 
         load_dotenv()
 
-        self.username = os.getenv("VIVAVOX_USERNAME")
-        self.password = os.getenv("VIVAVOX_PASSWORD")
-        self.number = os.getenv("VIVAVOX_NUMBER")
+        self.username = os.getenv(
+            "VIVAVOX_USERNAME"
+        )
+
+        self.password = os.getenv(
+            "VIVAVOX_PASSWORD"
+        )
+
+        self.number = os.getenv(
+            "VIVAVOX_NUMBER"
+        )
 
         self.ep = None
         self.acc = None
@@ -77,14 +164,17 @@ class SipServer:
         self.ep.libCreate()
 
         ep_cfg = pj.EpConfig()
-
-        # Important:
-        # Let Python explicitly drive PJSIP events.
         ep_cfg.uaConfig.threadCnt = 0
+
+        # NAT / STUN
+        ep_cfg.uaConfig.natTypeInSdp = 1
+        ep_cfg.uaConfig.stunServer.append("stun.l.google.com:19302")
+        ep_cfg.uaConfig.stunIgnoreFailure = False
 
         self.ep.libInit(ep_cfg)
 
         transport_cfg = pj.TransportConfig()
+
         transport_cfg.port = PORT
 
         self.ep.transportCreate(
@@ -93,6 +183,13 @@ class SipServer:
         )
 
         self.ep.libStart()
+
+        self.ep.audDevManager().setCaptureDev(3)
+        self.ep.audDevManager().setPlaybackDev(5)
+
+        print("[SIP] Audio devices configured:")
+        print("[SIP] Capture: CABLE Output")
+        print("[SIP] Playback: CABLE Input")
 
         print("[SIP] PJSIP started.")
 
@@ -118,12 +215,17 @@ class SipServer:
             credentials
         )
 
-        self.acc = SecretaryAccount()
+        self.acc = SecretaryAccount(self.server)
 
-        self.acc.create(account_cfg)
+        self.acc.create(
+            account_cfg
+        )
 
         print("[SIP] Account created.")
-        print("[SIP] Waiting for registration...")
+
+        print(
+            "[SIP] Waiting for registration..."
+        )
 
     def run(self):
 
@@ -131,10 +233,13 @@ class SipServer:
 
             while True:
 
-                # Explicitly process PJSIP events.
-                self.ep.libHandleEvents(50)
+                self.ep.libHandleEvents(
+                    50
+                )
 
-                time.sleep(0.01)
+                time.sleep(
+                    0.01
+                )
 
         except KeyboardInterrupt:
 
@@ -143,12 +248,18 @@ class SipServer:
 
     def stop(self):
 
-        print("[SIP] Shutting down.")
+        print(
+            "[SIP] Shutting down."
+        )
 
         if self.acc:
+
             self.acc.shutdown()
+
             self.acc = None
 
         if self.ep:
+
             self.ep.libDestroy()
+
             self.ep = None
