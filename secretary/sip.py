@@ -23,6 +23,8 @@ class SecretaryCall(pj.Call):
 
         ci = self.getInfo()
 
+        print("[SIP] onCallMediaState:", ci.media)
+
         if ci.state == pj.PJSIP_INV_STATE_CONFIRMED:
             ti = self.getMedTransportInfo(0)
             print("[SIP] local RTP:", ti.localRtpName)
@@ -184,8 +186,12 @@ class SipServer:
 
         self.ep.libStart()
 
-        self.ep.audDevManager().setCaptureDev(3)
-        self.ep.audDevManager().setPlaybackDev(5)
+        for i in range(self.ep.audDevManager().getDevCount()):
+            info = self.ep.audDevManager().getDevInfo(i)
+            print("[PJSIP DEVICE]", i, info.name, "in=", info.inputCount, "out=", info.outputCount)
+
+        self.ep.audDevManager().setCaptureDev(2)
+        self.ep.audDevManager().setPlaybackDev(4)
 
         print("[SIP] Audio devices configured:")
         print("[SIP] Capture: CABLE Output")

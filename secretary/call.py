@@ -27,9 +27,27 @@ SAMPLE_RATE = 8000
 CHANNELS = 1
 BLOCKSIZE = 320
 
-# sounddevice device IDs
-INPUT_DEVICE = 3     # CABLE Output
-OUTPUT_DEVICE = 6    # CABLE Input
+INPUT_DEVICE_NAME = "CABLE Output (VB-Audio Virtual Cable)"
+OUTPUT_DEVICE_NAME = "CABLE Input (VB-Audio Virtual Cable)"
+
+
+def find_device(name, input_device=True):
+
+    devices = sd.query_devices()
+
+    for index, device in enumerate(devices):
+
+        if device["name"] == name:
+
+            if input_device and device["max_input_channels"] > 0:
+                return index
+
+            if not input_device and device["max_output_channels"] > 0:
+                return index
+
+    raise RuntimeError(
+        f"Audio device not found: {name}"
+    )
 
 
 class AudioBridge:
@@ -46,13 +64,26 @@ class AudioBridge:
 
     def start(self):
 
+        input_device = find_device(
+            INPUT_DEVICE_NAME,
+            input_device=True
+        )
+
+        output_device = find_device(
+            OUTPUT_DEVICE_NAME,
+            input_device=False
+        )
+
+        print("[AUDIO] Input device:", input_device)
+        print("[AUDIO] Output device:", output_device)
+
         if self.running:
             return
 
         self.running = True
 
         self.input_stream = sd.InputStream(
-            device=INPUT_DEVICE,
+            device=input_device,
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
             dtype="int16",
@@ -61,7 +92,7 @@ class AudioBridge:
         )
 
         self.output_stream = sd.OutputStream(
-            device=OUTPUT_DEVICE,
+            device=output_device,
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
             dtype="int16",
@@ -74,20 +105,21 @@ class AudioBridge:
 
         print("[AUDIO] VB-CABLE bridge started.")
 
-    def _input_callback(
-        self,
-        indata,
-        frames,
-        time,
-        status
-    ):
+    def _input_callback(self, indata, frames, time, status):
 
         if status:
             print("[AUDIO INPUT]", status)
 
-        self.input_queue.put(
-            indata[:, 0].tobytes()
-        )
+        audio = indata[:, 0].tobytes()
+
+        self.input_queue.put(audio)
+
+        samples = np.frombuffer(audio, dtype=np.int16)
+
+        peak = np.max(np.abs(samples))
+
+        if peak > 100:
+            print("[AUDIO INPUT] peak:", peak)
 
     def _output_callback(
         self,

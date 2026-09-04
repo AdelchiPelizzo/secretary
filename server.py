@@ -1,4 +1,5 @@
 import os
+import queue
 import uuid
 import threading
 import time
@@ -128,6 +129,9 @@ class CallServer:
             # Basic speech detector.
             is_speech = rms > 500
 
+            if rms > 100:
+                print("[AUDIO] RMS:", round(rms, 1))
+
             if is_speech:
 
                 speech_started = True
@@ -242,6 +246,13 @@ class CallServer:
         while not audio_port.output_queue.empty():
             time.sleep(0.02)
 
+        # Discard audio captured while AI was speaking.
+        while not audio_port.input_queue.empty():
+            try:
+                audio_port.input_queue.get_nowait()
+            except queue.Empty:
+                break
+
         print("[TTS] AI finished speaking.")
 
     def process_call(self, sip_call):
@@ -251,6 +262,9 @@ class CallServer:
 
         print()
         print("[AI] Call processing started.")
+
+        # Initial greeting
+        self.text_to_speech_to_sip("Hello, how can I help you?", audio_port)
 
         try:
 
