@@ -6,10 +6,12 @@ import time
 
 import numpy as np
 import soundfile as sf
+import uvicorn
 
 from openai import OpenAI
 from dotenv import load_dotenv
 
+from secretary.api import app as api_app
 from secretary.call import Call
 from secretary.ai_service import speech_to_text, ask_ai
 from secretary.sip import SipServer
@@ -19,6 +21,9 @@ OUTPUT_DEVICE = 5
 
 SAMPLE_RATE = 44100
 CHANNELS = 1
+
+HTTP_HOST = "0.0.0.0"
+HTTP_PORT = 8000
 
 load_dotenv()
 
@@ -148,6 +153,8 @@ class CallServer:
 
                     break
 
+        print("[TIMING] Caller speech ended:", time.perf_counter())
+
         if not chunks:
             return None
 
@@ -207,6 +214,8 @@ class CallServer:
             samplerate,
             8000
         )
+
+        data = data * 3.0
 
         # Convert float32 [-1,1] to int16.
         data = np.clip(
@@ -271,58 +280,59 @@ class CallServer:
             while True:
 
                 # Wait for caller to speak.
-                audio = self.wait_for_speech(
-                    audio_port
-                )
+                audio = self.wait_for_speech(audio_port)
 
                 if audio is None:
                     continue
 
-                print(
-                    "[STT] Transcribing caller..."
-                )
+                speech_detected_time = time.perf_counter()
 
-                message = speech_to_text(
-                    audio
-                )
+                print("[TIMING] Caller speech detected:", speech_detected_time)
+
+                print("[STT] Transcribing caller...")
+
+                stt_start = time.perf_counter()
+
+                message = speech_to_text(audio)
+
+                stt_end = time.perf_counter()
+
+                print("[TIMING] STT:", round(stt_end - stt_start, 3), "seconds")
 
                 message = message.strip()
 
                 if not message:
-                    print(
-                        "[STT] No speech detected."
-                    )
+                    print("[STT] No speech detected.")
                     continue
 
                 print()
                 print("Caller:", message)
 
-                if (
-                    "hang up" in message.lower()
-                    or
-                    "hangup" in message.lower()
-                ):
-
-                    print(
-                        "[SIP] Caller requested hangup."
-                    )
+                if ("hang up" in message.lower() or "hangup" in message.lower()):
+                    print("[SIP] Caller requested hangup.")
 
                     break
 
-                action, answer = ask_ai(
-                    app_call,
-                    message
-                )
+                ai_start = time.perf_counter()
+
+                action, answer = ask_ai(app_call, message)
+
+                ai_end = time.perf_counter()
+
+                print("[TIMING] AI:", round(ai_end - ai_start, 3), "seconds")
 
                 if action == "APPOINTMENT_CONFIRMED":
-                    self.create_appointment(
-                        app_call
-                    )
+                    self.create_appointment(app_call)
 
-                self.text_to_speech_to_sip(
-                    answer,
-                    audio_port
-                )
+                tts_start = time.perf_counter()
+
+                self.text_to_speech_to_sip(answer, audio_port)
+
+                tts_end = time.perf_counter()
+
+                print("[TIMING] TTS:", round(tts_end - tts_start, 3), "seconds")
+
+                print("[TIMING] Total caller → TTS sent:", round(tts_end - speech_detected_time, 3), "seconds")
 
         except Exception as e:
 
@@ -340,10 +350,23 @@ load_dotenv()
 
 client = OpenAI()
 
+
+def start_http_server():
+    uvicorn.run(
+        api_app,
+        host=HTTP_HOST,
+        port=HTTP_PORT,
+    )
+
 server = CallServer()
 server.sip = SipServer(server)
 
 try:
+    threading.Thread(
+        target=start_http_server,
+        daemon=True
+    ).start()
+
     server.sip.start()
 
     print()
