@@ -190,8 +190,8 @@ class SipServer:
             info = self.ep.audDevManager().getDevInfo(i)
             print("[PJSIP DEVICE]", i, info.name, "in=", info.inputCount, "out=", info.outputCount)
 
-        self.ep.audDevManager().setCaptureDev(2)
-        self.ep.audDevManager().setPlaybackDev(6)
+        self.ep.audDevManager().setCaptureDev(3)
+        self.ep.audDevManager().setPlaybackDev(8)
 
         print("[SIP] Audio devices configured:")
         print("[SIP] Capture: CABLE Output")

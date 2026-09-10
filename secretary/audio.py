@@ -4,7 +4,7 @@ import numpy as np
 
 SAMPLE_RATE = 44100
 CHANNELS = 2
-INPUT_DEVICE = 17
+INPUT_DEVICE = 14
 
 
 def receive_audio():

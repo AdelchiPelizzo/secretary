@@ -27,7 +27,7 @@ SAMPLE_RATE = 8000
 CHANNELS = 1
 BLOCKSIZE = 320
 
-INPUT_DEVICE_NAME = "CABLE Output (VB-Audio Virtual Cable)"
+INPUT_DEVICE_NAME = "CABLE-A Output (VB-Audio Cable A)"
 OUTPUT_DEVICE_NAME = "Speakers (VB-Audio Cable A)"
 
 
