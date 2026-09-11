@@ -16,6 +16,11 @@ from secretary.call import Call
 from secretary.ai_service import speech_to_text, ask_ai
 from secretary.sip import SipServer
 
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+from secretary.calendar_service import create_event
+
 INPUT_DEVICE = 1
 OUTPUT_DEVICE = 5
 
@@ -75,6 +80,26 @@ class CallServer:
         print("Time:", appointment["time"])
         print("Duration:", appointment["duration_minutes"])
         print("=========================")
+
+        start_time = datetime.strptime(f"{appointment['date']} {appointment['time']}", "%Y-%m-%d %H:%M").replace(
+            tzinfo=ZoneInfo("Europe/Rome"))
+
+        duration = appointment["duration_minutes"]
+
+        if duration is None:
+            duration = 30
+
+        end_time = start_time + timedelta(minutes=duration)
+
+        created_event = create_event(title=appointment["title"], start_time=start_time, end_time=end_time, )
+
+        print()
+        print("=== GOOGLE CALENDAR EVENT CREATED ===")
+        print("Event ID:", created_event.get("id"))
+        print("Title:", created_event.get("summary"))
+        print("Start:", created_event.get("start", {}).get("dateTime"))
+        print("End:", created_event.get("end", {}).get("dateTime"))
+        print("======================================")
 
     def resample(self, audio, source_rate, target_rate):
 
