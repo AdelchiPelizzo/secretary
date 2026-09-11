@@ -28,7 +28,7 @@ CHANNELS = 1
 BLOCKSIZE = 320
 
 INPUT_DEVICE_NAME = "CABLE-A Output (VB-Audio Cable A)"
-OUTPUT_DEVICE_NAME = "Speakers (VB-Audio Cable A)"
+OUTPUT_DEVICE_NAME = "CABLE Input (VB-Audio Virtual Cable)"
 
 
 def find_device(name, input_device=True):
