@@ -12,16 +12,22 @@ PORT = 5060
 
 class SecretaryCall(pj.Call):
 
-    def __init__(self, account, call_id, app_call):
+    def __init__(self, account, call_id, app_call=None):
         super().__init__(account, call_id)
 
         self.account = account
         self.app_call = app_call
-        self.audio_port = app_call.audio_port
+        self.audio_port = None
+
+        if app_call is not None:
+            self.audio_port = app_call.audio_port
 
     def onCallState(self, prm):
 
         ci = self.getInfo()
+
+        print("[SIP] Remote URI:", ci.remoteUri)
+        print("[SIP] Local URI:", ci.localUri)
 
         print("[SIP] onCallMediaState:", ci.media)
 
@@ -53,7 +59,7 @@ class SecretaryCall(pj.Call):
 
         if ci.state == pj.PJSIP_INV_STATE_DISCONNECTED:
 
-            if hasattr(self, "audio_port"):
+            if hasattr(self, "audio_port") and self.audio_port is not None:
                 self.audio_port.stop()
 
             print("[SIP] Call disconnected.")
@@ -105,14 +111,25 @@ class SecretaryAccount(pj.Account):
         print("[SIP] INCOMING CALL")
         print("================================")
 
-        print(
-            "[SIP] Call ID:",
+        print("[SIP] Call ID:", prm.callId)
+
+        call = SecretaryCall(
+            self,
             prm.callId
         )
 
-        app_call = self.server.receive_call()
+        call_info = call.getInfo()
 
-        call = SecretaryCall(self, prm.callId, app_call)
+        print("[SIP] Remote URI:", call_info.remoteUri)
+        print("[SIP] Local URI:", call_info.localUri)
+
+        app_call = self.server.receive_call(
+            caller_number=call_info.remoteUri,
+            called_number=call_info.localUri
+        )
+
+        call.app_call = app_call
+        call.audio_port = app_call.audio_port
 
         self.active_calls[
             prm.callId
@@ -126,7 +143,11 @@ class SecretaryAccount(pj.Account):
 
         call.audio_port.start()
 
-        threading.Thread(target=self.server.process_call, args=(call,), daemon=True).start()
+        threading.Thread(
+            target=self.server.process_call,
+            args=(call,),
+            daemon=True
+        ).start()
 
         print("[SIP] CALL ANSWERED")
 
@@ -188,10 +209,18 @@ class SipServer:
 
         for i in range(self.ep.audDevManager().getDevCount()):
             info = self.ep.audDevManager().getDevInfo(i)
-            print("[PJSIP DEVICE]", i, info.name, "in=", info.inputCount, "out=", info.outputCount)
+            print(
+                "[PJSIP DEVICE]",
+                i,
+                info.name,
+                "in=",
+                info.inputCount,
+                "out=",
+                info.outputCount
+            )
 
-        self.ep.audDevManager().setCaptureDev(4)
-        self.ep.audDevManager().setPlaybackDev(8)
+        self.ep.audDevManager().setCaptureDev(3)
+        self.ep.audDevManager().setPlaybackDev(6)
 
         print("[SIP] Audio devices configured:")
         print("[SIP] Capture: CABLE Output")
@@ -269,3 +298,4 @@ class SipServer:
             self.ep.libDestroy()
 
             self.ep = None
+

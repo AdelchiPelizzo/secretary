@@ -27,8 +27,8 @@ SAMPLE_RATE = 8000
 CHANNELS = 1
 BLOCKSIZE = 320
 
-INPUT_DEVICE_NAME = "CABLE-A Output (VB-Audio Cable A)"
-OUTPUT_DEVICE_NAME = "CABLE Input (VB-Audio Virtual Cable)"
+INPUT_DEVICE_NAME = "CABLE Output (VB-Audio Virtual Cable)"
+OUTPUT_DEVICE_NAME = "Speakers (VB-Audio Cable A)"
 
 
 def find_device(name, input_device=True):
@@ -136,6 +136,7 @@ class AudioBridge:
 
         try:
             data = self.output_queue.get_nowait()
+            print("[AUDIO OUTPUT] Sending", len(data), "bytes")
         except queue.Empty:
             data = b""
 

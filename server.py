@@ -178,7 +178,9 @@ class CallServer:
 
                     break
 
-        print("[TIMING] Caller speech ended:", time.perf_counter())
+        speech_end_time = time.perf_counter()
+
+        print("[TIMING] Caller speech ended:", speech_end_time)
 
         if not chunks:
             return None
@@ -210,13 +212,15 @@ class CallServer:
         print()
         print("[TTS] Generating AI speech...")
 
-        response = client.audio.speech.create(
-            model="gpt-4o-mini-tts",
-            voice="coral",
-            input=text
-        )
+        tts_generation_start = time.perf_counter()
+
+        response = client.audio.speech.create(model="gpt-4o-mini-tts", voice="coral", input=text)
 
         response.write_to_file(filename)
+
+        tts_generation_end = time.perf_counter()
+
+        print("[TIMING] TTS generation:", round(tts_generation_end - tts_generation_start, 3), "seconds")
 
         data, samplerate = sf.read(
             filename,
@@ -309,6 +313,7 @@ class CallServer:
 
                 if audio is None:
                     continue
+                print("[TIMING] Audio received by process_call:", time.perf_counter())
 
                 speech_detected_time = time.perf_counter()
 

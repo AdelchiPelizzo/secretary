@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 from openai import OpenAI
 import soundfile as sf
+import time
 
 load_dotenv()
 
@@ -134,10 +135,13 @@ def ask_ai(call, message):
 
     messages.extend(call.messages)
 
-    response = client.chat.completions.create(
-        model="gpt-5-mini",
-        messages=messages
-    )
+    ai_request_start = time.perf_counter()
+
+    response = client.chat.completions.create(model="gpt-5.4-mini", messages=messages)
+
+    ai_request_end = time.perf_counter()
+
+    print("[TIMING] OpenAI AI request:", round(ai_request_end - ai_request_start, 3), "seconds")
 
     raw_answer = response.choices[0].message.content.strip()
 

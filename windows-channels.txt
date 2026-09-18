@@ -1,0 +1,40 @@
+# WINDOWS CHANNELS — REBOOT PROCEDURE
+
+1. Open PowerShell in the Secretary project:
+
+C:\Users\adpel\PycharmProjects\PythonProject\Secretary
+
+2. Run this command to list the current PJSIP audio devices:
+
+python -c "from secretary import pjsua2 as pj; ep=pj.Endpoint(); ep.libCreate(); ep.libInit(pj.EpConfig()); [print(f'{i}: {ep.audDevManager().getDevInfo(i).name} | in={ep.audDevManager().getDevInfo(i).inputCount} | out={ep.audDevManager().getDevInfo(i).outputCount}') for i in range(ep.audDevManager().getDevCount())]; ep.libDestroy()"
+
+3. Find these two devices in the output:
+
+CABLE-A Output (VB-Audio Cable A)
+CABLE Input (VB-Audio Virtual Cable)
+
+4. Set them in sip.py:
+
+PJSIP CAPTURE:
+CABLE-A Output (VB-Audio Cable A)
+
+PJSIP PLAYBACK:
+CABLE Input (VB-Audio Virtual Cable)
+
+5. In sip.py, change ONLY these two numbers:
+
+self.ep.audDevManager().setCaptureDev(<CABLE-A Output index>)
+self.ep.audDevManager().setPlaybackDev(<CABLE Input index>)
+
+CURRENT EXAMPLE:
+Capture = 3
+Playback = 6
+
+self.ep.audDevManager().setCaptureDev(3)
+self.ep.audDevManager().setPlaybackDev(6)
+
+IMPORTANT:
+Do NOT assume the indexes remain the same after a Windows reboot.
+Always run the device-list command first and use the current indexes.
+
+Do NOT change the other SIP/audio configuration as part of this procedure.
