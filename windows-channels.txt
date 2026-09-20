@@ -6,7 +6,8 @@ C:\Users\adpel\PycharmProjects\PythonProject\Secretary
 
 2. Run this command to list the current PJSIP audio devices:
 
-python -c "from secretary import pjsua2 as pj; ep=pj.Endpoint(); ep.libCreate(); ep.libInit(pj.EpConfig()); [print(f'{i}: {ep.audDevManager().getDevInfo(i).name} | in={ep.audDevManager().getDevInfo(i).inputCount} | out={ep.audDevManager().getDevInfo(i).outputCount}') for i in range(ep.audDevManager().getDevCount())]; ep.libDestroy()"
+cd C:\Users\adpel\PycharmProjects\PythonProject\Secretary\secretary
+python -c "import pjsua2; ep=pjsua2.Endpoint(); ep.libCreate(); ep.libInit(pjsua2.EpConfig()); ep.libStart(); mgr=ep.audDevManager(); [print(f'{i}: {mgr.getDevInfo(i).name:<500}') for i in range(mgr.getDevCount())]; ep.libDestroy()"
 
 3. Find these two devices in the output:
 
