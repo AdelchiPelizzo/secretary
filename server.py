@@ -3,6 +3,7 @@ import queue
 import uuid
 import threading
 import time
+import requests
 
 import numpy as np
 import soundfile as sf
@@ -13,13 +14,16 @@ from dotenv import load_dotenv
 
 from secretary.api import app as api_app
 from secretary.call import Call
-from secretary.ai_service import speech_to_text, ask_ai
 from secretary.sip import SipServer
+from secretary.ai_service import (
+    speech_to_text,
+    ask_ai,
+    generate_availability_response,
+    generate_appointment_confirmation_response,
+    generate_appointment_created_response
+)
 
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-
-from secretary.calendar_service import create_event
+from babel.dates import format_date, format_time
 
 INPUT_DEVICE = 1
 OUTPUT_DEVICE = 5
@@ -59,6 +63,15 @@ class CallServer:
             called_number
         )
 
+        forwarding_number = self.extract_forwarding_number(called_number)
+
+        config = get_secretary_config(forwarding_number)
+
+        if config and config.get("language"):
+            call.language = config["language"]
+
+        print("[CONFIG] Call language:", call.language)
+
         self.calls[call_id] = call
 
         print()
@@ -68,6 +81,78 @@ class CallServer:
         print("================================")
 
         return call
+
+    def extract_forwarding_number(self, called_number):
+
+        if not called_number:
+            return None
+        return called_number.split(":")[1].split("@")[0]
+
+    def check_appointment_availability(self, call):
+
+        appointment = call.appointment
+
+        forwarding_number = self.extract_forwarding_number(call.called_number)
+
+        duration = appointment["duration_minutes"]
+
+        if duration is None:
+            duration = 30
+
+        response = check_appointment_web(forwarding_number=forwarding_number, title=appointment["title"],
+            date=appointment["date"], time=appointment["time"], duration=duration)
+
+        if response.status_code == 200:
+
+            data = response.json()
+
+            print()
+            print("=== APPOINTMENT AVAILABLE ===")
+            print("================================")
+
+            return True, []
+
+        elif response.status_code == 409:
+
+            data = response.json()
+
+            alternatives = data.get("availableSlots", [])
+
+            print()
+            print("=== APPOINTMENT NOT AVAILABLE ===")
+            print("Available slots:", alternatives)
+            print("=================================")
+
+            return False, alternatives
+
+        else:
+
+            print()
+            print("=== AVAILABILITY CHECK ERROR ===")
+            print("Status:", response.status_code)
+            print("Response:", response.text)
+            print("================================")
+
+            return False, []
+
+    def format_spoken_datetime(self, date_value, time_value, language):
+        try:
+            from datetime import datetime
+
+            date_obj = datetime.strptime(date_value, "%Y-%m-%d")
+            time_obj = datetime.strptime(time_value, "%H:%M")
+
+            locale = language or "en"
+
+            spoken_date = format_date(date_obj, format="EEEE d MMMM", locale=locale)
+
+            spoken_time = format_time(time_obj, format="short", locale=locale)
+
+            return f"{spoken_date} {spoken_time}"
+
+        except Exception as e:
+            print("[DATE FORMAT] Error:", e)
+            return f"{date_value} {time_value}"
 
     def create_appointment(self, call):
 
@@ -81,25 +166,49 @@ class CallServer:
         print("Duration:", appointment["duration_minutes"])
         print("=========================")
 
-        start_time = datetime.strptime(f"{appointment['date']} {appointment['time']}", "%Y-%m-%d %H:%M").replace(
-            tzinfo=ZoneInfo("Europe/Rome"))
+        forwarding_number = self.extract_forwarding_number(call.called_number)
 
         duration = appointment["duration_minutes"]
 
         if duration is None:
             duration = 30
 
-        end_time = start_time + timedelta(minutes=duration)
+        response = create_appointment_web(forwarding_number=forwarding_number, title=appointment["title"],
+            date=appointment["date"], time=appointment["time"], duration=duration)
 
-        created_event = create_event(title=appointment["title"], start_time=start_time, end_time=end_time, )
+        if response.status_code == 200:
 
-        print()
-        print("=== GOOGLE CALENDAR EVENT CREATED ===")
-        print("Event ID:", created_event.get("id"))
-        print("Title:", created_event.get("summary"))
-        print("Start:", created_event.get("start", {}).get("dateTime"))
-        print("End:", created_event.get("end", {}).get("dateTime"))
-        print("======================================")
+            data = response.json()
+
+            print()
+            print("=== SECRETARYWEB APPOINTMENT CREATED ===")
+            print("Event ID:", data.get("eventId"))
+            print("Business:", data.get("businessName"))
+            print("========================================")
+
+            return True
+
+        elif response.status_code == 409:
+
+            data = response.json()
+
+            print()
+            print("=== APPOINTMENT NOT AVAILABLE ===")
+            print("Reason:", data.get("error"))
+            print("Available slots:", data.get("availableSlots"))
+            print("=================================")
+
+            return False
+
+        else:
+
+            print()
+            print("=== APPOINTMENT ERROR ===")
+            print("Status:", response.status_code)
+            print("Response:", response.text)
+            print("==========================")
+
+            return False
 
     def resample(self, audio, source_rate, target_rate):
 
@@ -279,7 +388,7 @@ class CallServer:
             audio_port.output_queue.put(
                 chunk
             )
-
+        print("[TTS] Queue size after feeding:", audio_port.output_queue.qsize())
         # Wait until all generated audio has been consumed.
         while not audio_port.output_queue.empty():
             time.sleep(0.02)
@@ -351,8 +460,52 @@ class CallServer:
 
                 print("[TIMING] AI:", round(ai_end - ai_start, 3), "seconds")
 
-                if action == "APPOINTMENT_CONFIRMED":
-                    self.create_appointment(app_call)
+                if action == "CREATE_APPOINTMENT":
+
+                    appointment = app_call.appointment
+
+                    if appointment["title"] and appointment["date"] and appointment["time"]:
+
+                        print("[DEBUG] Starting appointment availability check...")
+
+                        available, alternatives = self.check_appointment_availability(app_call)
+
+                        if available:
+
+                            answer = generate_appointment_confirmation_response(app_call)
+
+                            app_call.appointment_status = "CONFIRMING"
+                            app_call.appointment["alternatives"] = []
+
+                        else:
+
+                            if alternatives:
+
+                                print("[DEBUG] Alternatives returned by SecretaryWeb:", alternatives)
+                                print("[DEBUG] AI-selected appointment:", appointment["date"], appointment["time"])
+
+                                app_call.appointment["alternatives"] = alternatives
+
+                                answer = generate_availability_response(app_call, alternatives)
+
+                                app_call.appointment_status = "CHOOSING_ALTERNATIVE"
+
+                            else:
+
+                                answer = ("I'm sorry, that time is not available, "
+                                          "and I could not find an alternative.")
+
+                elif action == "APPOINTMENT_CONFIRMED":
+
+                    appointment_created = self.create_appointment(app_call)
+
+                    if appointment_created:
+                        answer = generate_appointment_created_response(app_call)
+                    else:
+                        answer = ("I'm sorry, that time is no longer available. "
+                                  "The appointment was not added to the calendar.")
+
+
 
                 tts_start = time.perf_counter()
 
@@ -376,10 +529,71 @@ class CallServer:
             print("[AI] Call processing finished.")
 
 
-load_dotenv()
+def create_appointment_web(forwarding_number, title, date, time, duration):
+    url = "https://secretaryweb.onrender.com/api/appointments"
 
-client = OpenAI()
+    payload = {
+        "forwardingNumber": forwarding_number,
+        "title": title,
+        "date": date,
+        "time": time,
+        "duration": duration
+    }
 
+    response = requests.post(url, json=payload)
+
+    print()
+    print("=== SECRETARYWEB APPOINTMENT RESPONSE ===")
+    print("Status:", response.status_code)
+    print("Body:", response.text)
+    print("==========================================")
+
+    return response
+
+def check_appointment_web(forwarding_number, title, date, time, duration):
+
+    url = "https://secretaryweb.onrender.com/api/appointments"
+
+    payload = {
+        "forwardingNumber": forwarding_number,
+        "title": title,
+        "date": date,
+        "time": time,
+        "duration": duration,
+        "checkOnly": True
+    }
+
+    response = requests.post(url, json=payload, timeout=10)
+
+    print()
+    print("=== SECRETARYWEB AVAILABILITY RESPONSE ===")
+    print("Status:", response.status_code)
+    print("Body:", response.text)
+    print("==========================================")
+
+    return response
+
+def get_secretary_config(forwarding_number):
+    try:
+        url = "https://secretaryweb.onrender.com/api/secretary-config"
+
+        response = requests.get(
+            url,
+            params={"forwardingNumber": forwarding_number},
+            timeout=10
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        print("[CONFIG] Secretary config:", data)
+
+        return data
+
+    except Exception as e:
+        print("[CONFIG] Failed to get secretary config:", e)
+        return None
 
 def start_http_server():
     uvicorn.run(

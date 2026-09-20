@@ -186,7 +186,8 @@ class Call:
             "title": None,
             "date": None,
             "time": None,
-            "duration_minutes": None
+            "duration_minutes": None,
+            "alternatives": []
         }
 
         self.appointment_status = "NONE"

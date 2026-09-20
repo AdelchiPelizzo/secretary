@@ -36,11 +36,34 @@ def ask_ai(call, message):
 
     appointment = call.appointment
 
+    spoken_date = appointment["date"]
+
+    # try:
+    #     date_obj = datetime.strptime(
+    #         appointment["date"],
+    #         "%Y-%m-%d"
+    #     )
+    #
+    #     spoken_date = date_obj.strftime("%A %d %B")
+    #
+    # except (ValueError, TypeError):
+    #     pass
+
+    if call.appointment_status != "CHOOSING_ALTERNATIVE":
+        appointment["alternatives"] = []
+
     messages = [{
         "role": "system",
         "content": (
             "You are a professional and friendly telephone secretary. "
-            "Respond in the same language as the caller. "
+            "Respond in the language currently spoken by the caller. "
+            "Detect the language of the caller's latest message. "
+            "If the caller speaks a different language from the current conversation language, "
+            "immediately switch to that language and continue the conversation in it. "
+            "Update the conversation language internally when the caller changes language. "
+            "Speak naturally, like a real human telephone secretary. "
+            "Use conversational language rather than technical, robotic, "
+            "formal, or machine-generated phrasing. "
             "Answer naturally and concisely. "
             "Keep responses short because they will be spoken aloud.\n\n"
 
@@ -48,12 +71,35 @@ def ask_ai(call, message):
 
             "Current appointment status:\n"
             f"{call.appointment_status}\n\n"
+            
+            "Current conversation language:\n"
+            f"{call.language}\n\n"
+            
+            "Language rule:\n"
+            "The configured secretary language is the starting language only. "
+            "The caller's actual spoken language has priority during the conversation. "
+            "If the caller speaks a different language, identify the new language "
+            "and use it for the response and subsequent conversation.\n\n"
+            
+            "Appointment status rules:\n"
+            "If the status is CHOOSING_ALTERNATIVE, the previously requested "
+            "appointment time was unavailable and alternatives have been offered.\n"
+            "The caller may identify an alternative using its date, time, position "
+            "in the list, or a natural-language reference such as 'the first one' "
+            "or an equivalent expression in their language.\n"
+            "When the caller clearly selects one of the offered alternatives, "
+            "update DATE and TIME to the exact date and time of that alternative "
+            "and use CREATE_APPOINTMENT.\n"
+            "Do not use APPOINTMENT_CONFIRMED until the system has checked the "
+            "selected alternative and explicitly asks for confirmation.\n\n"
 
             "Current appointment information:\n"
             f"title = {appointment['title']}\n"
             f"date = {appointment['date']}\n"
+            # f"spoken_date = {spoken_date}\n"
             f"time = {appointment['time']}\n"
-            f"duration_minutes = {appointment['duration_minutes']}\n\n"
+            f"duration_minutes = {appointment['duration_minutes']}\n"
+            f"alternatives = {appointment['alternatives']}\n\n"
 
             "If the caller wants an appointment, collect the required "
             "information across multiple turns.\n\n"
@@ -62,12 +108,33 @@ def ask_ai(call, message):
             "- title\n"
             "- date\n"
             "- time\n\n"
+            
+            "Date format rule:\n"
+            "Always return DATE in YYYY-MM-DD format.\n"
+            "Never return words such as today, tomorrow, Sunday, Monday, "
+            "or other natural-language dates in the DATE field.\n\n"
+    
+            "Spoken date and time rule:\n"
+            "DATE and TIME are internal values for the appointment system. "
+            "They are NOT meant to be read aloud as written.\n"
+            "When speaking to the caller, always translate dates and times "
+            "into natural conversational language before saying them.\n"
+            "Never read dates digit-by-digit or as numbers separated by "
+            "the word 'dash'. Never read times as military time, 'hundred hours', "
+            "or any other robotic or technical format.\n"
+            "Speak as a normal human telephone secretary would speak.\n"
+            "Use natural spoken date and time expressions appropriate to the "
+            "caller's current language and locale. "
+            "Do not read dates or times in a technical or machine-like format. "
+            "Do not speak the year unless it is necessary for clarity.\n"
+            "Prefer normal conversational forms used by native speakers of the "
+            "caller's language rather than reading the internal DATE and TIME values literally.\n\n"
 
             "Do not ask for information that the caller has already provided.\n\n"
 
-            "When all required information has been collected, summarize "
-            "the appointment and ask the caller whether they want it added "
-            "to their calendar.\n\n"
+            "When all required information has been collected, use "
+            "CREATE_APPOINTMENT. Do not ask for confirmation yet. "
+            "The system will check availability before asking for confirmation.\n\n"
 
             "When asking for confirmation, use action CONFIRM_APPOINTMENT.\n\n"
 
@@ -76,7 +143,12 @@ def ask_ai(call, message):
             "If the caller clearly rejects or cancels the appointment, "
             "use action APPOINTMENT_CANCELLED.\n\n"
 
+            "Use the ISO 639-1 two-letter language code for LANGUAGE, "
+            "such as it for Italian, en for English, fr for French, "
+            "de for German, es for Spanish, and so on.\n\n"
+            
             "Return exactly this format:\n"
+            "LANGUAGE: <ISO 639-1 language code>\n"
             "ACTION: <action>\n"
             "TITLE: <value or NONE>\n"
             "DATE: <value or NONE>\n"
@@ -89,7 +161,8 @@ def ask_ai(call, message):
             "CREATE_APPOINTMENT\n"
             "CONFIRM_APPOINTMENT\n"
             "APPOINTMENT_CONFIRMED\n"
-            "APPOINTMENT_CANCELLED\n\n"
+            "APPOINTMENT_CANCELLED\n"
+            "CHOOSING_ALTERNATIVE\n"
 
             "Use CREATE_APPOINTMENT while collecting appointment "
             "information.\n\n"
@@ -106,6 +179,7 @@ def ask_ai(call, message):
             "Use NONE for normal conversation.\n\n"
 
             "Example confirmation:\n"
+            "LANGUAGE: <ISO 639-1 language code>\n"
             "ACTION: CONFIRM_APPOINTMENT\n"
             "TITLE: Dentist\n"
             "DATE: 2026-08-26\n"
@@ -115,6 +189,7 @@ def ask_ai(call, message):
             "Shall I add it to your calendar?\n\n"
 
             "Example confirmation response:\n"
+            "LANGUAGE: <ISO 639-1 language code>\n"
             "ACTION: APPOINTMENT_CONFIRMED\n"
             "TITLE: Dentist\n"
             "DATE: 2026-08-26\n"
@@ -124,6 +199,7 @@ def ask_ai(call, message):
             "to your calendar.\n\n"
 
             "Example cancellation:\n"
+            "LANGUAGE: <ISO 639-1 language code>\n"
             "ACTION: APPOINTMENT_CANCELLED\n"
             "TITLE: NONE\n"
             "DATE: NONE\n"
@@ -153,8 +229,13 @@ def ask_ai(call, message):
     answer = raw_answer
 
     for line in raw_answer.splitlines():
+        if line.startswith("LANGUAGE:"):
+            value = line.replace("LANGUAGE:", "", 1).strip()
 
-        if line.startswith("ACTION:"):
+            if value:
+                call.language = value
+
+        elif line.startswith("ACTION:"):
             action = line.replace("ACTION:", "", 1).strip()
 
         elif line.startswith("TITLE:"):
@@ -212,6 +293,119 @@ def ask_ai(call, message):
     print("AI:", answer)
 
     return action, answer
+
+def generate_availability_response(call, alternatives):
+    appointment = call.appointment
+
+    formatted_slots = ", ".join(
+        f"{slot['date']} {slot['time']}"
+        for slot in alternatives
+    )
+
+    messages = [{
+        "role": "system",
+        "content": (
+            "You are a professional and friendly telephone secretary. "
+            "Respond in the caller's current language. "
+            "Speak naturally and concisely, as the response will be spoken aloud.\n\n"
+
+            "The requested appointment time is not available. "
+            "Tell the caller that the requested time is unavailable, "
+            "provide the available alternatives, and ask whether one of them works.\n\n"
+
+            "Current conversation language:\n"
+            f"{call.language}\n\n"
+
+            "Requested appointment:\n"
+            f"title = {appointment['title']}\n"
+            f"date = {appointment['date']}\n"
+            f"time = {appointment['time']}\n\n"
+
+            "Available alternatives:\n"
+            f"{formatted_slots}\n\n"
+
+            "Return only the spoken response. "
+            "Do not include labels, explanations, or technical information."
+        )
+    }]
+
+    response = client.chat.completions.create(
+        model="gpt-5.4-mini",
+        messages=messages
+    )
+
+    return response.choices[0].message.content.strip()
+
+def generate_appointment_confirmation_response(call):
+    appointment = call.appointment
+
+    messages = [{
+        "role": "system",
+        "content": (
+            "You are a professional and friendly telephone secretary. "
+            "Respond in the caller's current language. "
+            "Speak naturally and concisely, as the response will be spoken aloud.\n\n"
+
+            "The requested appointment time is available. "
+            "Tell the caller that the requested appointment time is available "
+            "and ask whether they would like you to add it to their calendar.\n\n"
+
+            "Current conversation language:\n"
+            f"{call.language}\n\n"
+
+            "Appointment:\n"
+            f"title = {appointment['title']}\n"
+            f"date = {appointment['date']}\n"
+            f"time = {appointment['time']}\n\n"
+
+            "Use natural spoken date and time expressions appropriate to "
+            "the caller's language.\n\n"
+
+            "Return only the spoken response. "
+            "Do not include labels, explanations, or technical information."
+        )
+    }]
+
+    response = client.chat.completions.create(
+        model="gpt-5.4-mini",
+        messages=messages
+    )
+
+    return response.choices[0].message.content.strip()
+
+def generate_appointment_created_response(call):
+    messages = [{
+        "role": "system",
+        "content": (
+            "You are a professional and friendly telephone secretary. "
+            "Respond in the caller's current language. "
+            "Speak naturally and concisely, as the response will be spoken aloud.\n\n"
+
+            "The appointment has now been successfully added to the calendar. "
+            "Tell the caller that the appointment has been successfully added.\n\n"
+
+            "Current conversation language:\n"
+            f"{call.language}\n\n"
+
+            "Appointment:\n"
+            f"title = {call.appointment['title']}\n"
+            f"date = {call.appointment['date']}\n"
+            f"time = {call.appointment['time']}\n\n"
+
+            "Use natural spoken date and time expressions appropriate to "
+            "the caller's language.\n\n"
+
+            "Return only the spoken response. "
+            "Do not include labels, explanations, or technical information."
+        )
+    }]
+
+    response = client.chat.completions.create(
+        model="gpt-5.4-mini",
+        messages=messages
+    )
+
+    return response.choices[0].message.content.strip()
 
 def text_to_speech(text):
     filename = "ai_response.wav"
