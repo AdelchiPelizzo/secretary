@@ -52,9 +52,35 @@ def ask_ai(call, message):
     if call.appointment_status != "CHOOSING_ALTERNATIVE":
         appointment["alternatives"] = []
 
+    print("[AI CONFIG] "
+          f"name={call.secretary_config.get('secretaryName', 'Secretary')} | "
+          f"type={call.secretary_config.get('secretaryType', 'general')} | "
+          f"personality={call.secretary_config.get('personality', 'professional')} | "
+          f"default_language={call.secretary_config.get('language', 'en')} | "
+          f"supported_languages={call.secretary_config.get('supportedLanguages', [])} | "
+          f"instructions={call.secretary_config.get('instructions', '')}")
+
     messages = [{
         "role": "system",
         "content": (
+            f"Business configuration:\n"
+            f"Secretary name: {call.secretary_config.get('secretaryName', 'Secretary')}\n"
+            f"Secretary type: {call.secretary_config.get('secretaryType', 'general')}\n"
+            f"Personality: {call.secretary_config.get('personality', 'professional')}\n"
+            f"Default language: {call.secretary_config.get('language', 'en')}\n"
+            f"Supported additional languages: {', '.join(call.secretary_config.get('supportedLanguages', []))}\n"
+            f"Business instructions: {call.secretary_config.get('instructions', '')}\n\n"
+            
+            "Use the business configuration above when generating your responses. "
+            "Adapt your tone and behavior to the configured personality and secretary type. "
+            "Use the additional information and instructions provided by the business "
+            "whenever they are relevant to the caller's request. "
+            "Additional information may include temporary notices, policies, "
+            "operational information, or specific instructions for handling callers. "
+            "Do not apply unrelated information to the conversation. "
+            "The business configuration takes priority over generic secretary behavior, "
+            "provided that it does not conflict with the caller's request or system rules.\n\n"
+            
             "You are a professional and friendly telephone secretary. "
             "Respond in the language currently spoken by the caller. "
             "Detect the language of the caller's latest message. "
@@ -79,7 +105,10 @@ def ask_ai(call, message):
             "The configured secretary language is the starting language only. "
             "The caller's actual spoken language has priority during the conversation. "
             "If the caller speaks a different language, identify the new language "
-            "and use it for the response and subsequent conversation.\n\n"
+            "and use it for the response and subsequent conversation, "
+            "but only switch to a language configured as supported by the business. "
+            "If the caller uses a language that is not configured as supported, "
+            "continue using the current conversation language.\n\n"
             
             "Appointment status rules:\n"
             "If the status is CHOOSING_ALTERNATIVE, the previously requested "

@@ -181,6 +181,7 @@ class Call:
         self.called_number = called_number
         self.language = None
         self.messages = []
+        self.secretary_config = {}
 
         self.appointment = {
             "title": None,

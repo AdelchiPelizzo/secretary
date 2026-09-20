@@ -66,11 +66,18 @@ class CallServer:
         forwarding_number = self.extract_forwarding_number(called_number)
 
         config = get_secretary_config(forwarding_number)
+        if config:
+            call.secretary_config = config
 
-        if config and config.get("language"):
-            call.language = config["language"]
+            print("[CONFIG] Secretary config stored:", call.secretary_config)
 
-        print("[CONFIG] Call language:", call.language)
+            if config.get("language"):
+                call.language = config["language"]
+
+            call.supported_languages = config.get("supportedLanguages", [])
+
+            print("[CONFIG] Call language:", call.language)
+            print("[CONFIG] Supported languages:", call.supported_languages)
 
         self.calls[call_id] = call
 
@@ -411,7 +418,9 @@ class CallServer:
         print("[AI] Call processing started.")
 
         # Initial greeting
-        self.text_to_speech_to_sip("Hello, how can I help you?", audio_port)
+        greeting = app_call.secretary_config.get("greeting", "Hello, how can I help you?")
+
+        self.text_to_speech_to_sip(greeting, audio_port)
 
         try:
 
