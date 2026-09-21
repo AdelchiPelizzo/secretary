@@ -463,6 +463,8 @@ class CallServer:
 
                 ai_start = time.perf_counter()
 
+                appointment_status_before_ai = app_call.appointment_status
+
                 action, answer = ask_ai(app_call, message)
 
                 ai_end = time.perf_counter()
@@ -474,6 +476,9 @@ class CallServer:
                     appointment = app_call.appointment
 
                     if appointment["title"] and appointment["date"] and appointment["time"]:
+
+                        if appointment_status_before_ai != "CHOOSING_ALTERNATIVE":
+                            self.text_to_speech_to_sip(answer, audio_port)
 
                         print("[DEBUG] Starting appointment availability check...")
 
@@ -537,9 +542,14 @@ class CallServer:
             print()
             print("[AI] Call processing finished.")
 
-
 def create_appointment_web(forwarding_number, title, date, time, duration):
-    url = "https://secretaryweb.onrender.com/api/appointments"
+
+    # url = "https://secretaryweb.onrender.com/api/appointments"
+    url = f"{os.getenv('SECRETARYWEB_API_URL')}/api/appointments"
+
+    headers = {
+        "Authorization": f"Bearer {os.getenv('SECRETARY_API_KEY')}"
+    }
 
     payload = {
         "forwardingNumber": forwarding_number,
@@ -549,7 +559,12 @@ def create_appointment_web(forwarding_number, title, date, time, duration):
         "duration": duration
     }
 
-    response = requests.post(url, json=payload)
+    response = requests.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=10
+    )
 
     print()
     print("=== SECRETARYWEB APPOINTMENT RESPONSE ===")
@@ -561,7 +576,12 @@ def create_appointment_web(forwarding_number, title, date, time, duration):
 
 def check_appointment_web(forwarding_number, title, date, time, duration):
 
-    url = "https://secretaryweb.onrender.com/api/appointments"
+    # url = "https://secretaryweb.onrender.com/api/appointments"
+    url = f"{os.getenv('SECRETARYWEB_API_URL')}/api/appointments"
+
+    headers = {
+        "Authorization": f"Bearer {os.getenv('SECRETARY_API_KEY')}"
+    }
 
     payload = {
         "forwardingNumber": forwarding_number,
@@ -572,7 +592,12 @@ def check_appointment_web(forwarding_number, title, date, time, duration):
         "checkOnly": True
     }
 
-    response = requests.post(url, json=payload, timeout=10)
+    response = requests.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=10
+    )
 
     print()
     print("=== SECRETARYWEB AVAILABILITY RESPONSE ===")
@@ -584,11 +609,16 @@ def check_appointment_web(forwarding_number, title, date, time, duration):
 
 def get_secretary_config(forwarding_number):
     try:
-        url = "https://secretaryweb.onrender.com/api/secretary-config"
+        # url = "https://secretaryweb.onrender.com/api/secretary-config"
+        url = f"{os.getenv('SECRETARYWEB_API_URL')}/api/secretary-config"
+        headers = {
+            "Authorization": f"Bearer {os.getenv('SECRETARY_API_KEY')}"
+        }
 
         response = requests.get(
             url,
             params={"forwardingNumber": forwarding_number},
+            headers=headers,
             timeout=10
         )
 

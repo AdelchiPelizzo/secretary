@@ -36,6 +36,8 @@ def ask_ai(call, message):
 
     appointment = call.appointment
 
+    previous_appointment_status = call.appointment_status
+
     spoken_date = appointment["date"]
 
     # try:
@@ -110,6 +112,18 @@ def ask_ai(call, message):
             "If the caller uses a language that is not configured as supported, "
             "continue using the current conversation language.\n\n"
             
+            "Appointment state protection:\n"
+            "If the current appointment status is CONFIRMED, the appointment has "
+            "already been successfully confirmed and must not be confirmed again.\n"
+            "Treat subsequent messages such as thank you, thanks, goodbye, okay, "
+            "great, perfect, or other normal closing conversation as ordinary "
+            "conversation and use action NONE.\n"
+            "Do not reuse the previously confirmed appointment for any new "
+            "appointment action unless the caller clearly starts a new appointment "
+            "request.\n"
+            "APPOINTMENT_CONFIRMED may only be used when the current appointment "
+            "status is CONFIRMING and the caller clearly confirms that appointment.\n\n"
+            
             "Appointment status rules:\n"
             "If the status is CHOOSING_ALTERNATIVE, the previously requested "
             "appointment time was unavailable and alternatives have been offered.\n"
@@ -132,6 +146,13 @@ def ask_ai(call, message):
 
             "If the caller wants an appointment, collect the required "
             "information across multiple turns.\n\n"
+            
+            "When using CREATE_APPOINTMENT, the appointment has NOT yet been booked. "
+            "The system must check availability first.\n"
+            "Do not say or imply that the appointment has been booked, confirmed, "
+            "scheduled, or successfully added to the calendar.\n"
+            "Instead, tell the caller that you will check whether the requested "
+            "appointment time is available.\n\n"
 
             "Required information:\n"
             "- title\n"
@@ -299,13 +320,13 @@ def ask_ai(call, message):
 
     if action == "CREATE_APPOINTMENT":
         call.appointment_status = "COLLECTING"
-
     elif action == "CONFIRM_APPOINTMENT":
         call.appointment_status = "CONFIRMING"
-
     elif action == "APPOINTMENT_CONFIRMED":
-        call.appointment_status = "CONFIRMED"
-
+        if previous_appointment_status == "CONFIRMING":
+            call.appointment_status = "CONFIRMED"
+        else:
+            action = "NONE"
     elif action == "APPOINTMENT_CANCELLED":
         call.appointment_status = "CANCELLED"
 
@@ -377,7 +398,9 @@ def generate_appointment_confirmation_response(call):
 
             "The requested appointment time is available. "
             "Tell the caller that the requested appointment time is available "
-            "and ask whether they would like you to add it to their calendar.\n\n"
+            "and ask whether they would like you to add it to the calendar of the person "
+            "named in the appointment title.\n"
+            "Do not refer to the calendar as the caller's calendar.\n\n"
 
             "Current conversation language:\n"
             f"{call.language}\n\n"
