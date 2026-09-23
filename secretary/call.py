@@ -182,12 +182,14 @@ class Call:
         self.language = None
         self.messages = []
         self.secretary_config = {}
+        self.note = None
 
         self.appointment = {
             "title": None,
             "date": None,
             "time": None,
             "duration_minutes": None,
+            "description": None,
             "alternatives": []
         }
 

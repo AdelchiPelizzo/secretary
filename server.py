@@ -171,6 +171,7 @@ class CallServer:
         print("Date:", appointment["date"])
         print("Time:", appointment["time"])
         print("Duration:", appointment["duration_minutes"])
+        print("Description:", appointment["description"])
         print("=========================")
 
         forwarding_number = self.extract_forwarding_number(call.called_number)
@@ -180,8 +181,14 @@ class CallServer:
         if duration is None:
             duration = 30
 
-        response = create_appointment_web(forwarding_number=forwarding_number, title=appointment["title"],
-            date=appointment["date"], time=appointment["time"], duration=duration)
+        response = create_appointment_web(
+            forwarding_number=forwarding_number,
+            title=appointment["title"],
+            date=appointment["date"],
+            time=appointment["time"],
+            duration=duration,
+            description=appointment["description"]
+        )
 
         if response.status_code == 200:
 
@@ -216,6 +223,31 @@ class CallServer:
             print("==========================")
 
             return False
+
+    def create_note(self, call):
+
+        note_text = call.note
+
+        if not note_text:
+            print("[NOTE] No note text available.")
+            return False
+
+        forwarding_number = self.extract_forwarding_number(
+            call.called_number
+        )
+
+        response = create_note_web(
+            forwarding_number=forwarding_number,
+            text=note_text,
+            caller_number=call.caller_number
+        )
+
+        if response.status_code in (200, 201):
+            print("[NOTE] Note created successfully.")
+            return True
+
+        print("[NOTE] Failed to create note.")
+        return False
 
     def resample(self, audio, source_rate, target_rate):
 
@@ -519,7 +551,16 @@ class CallServer:
                         answer = ("I'm sorry, that time is no longer available. "
                                   "The appointment was not added to the calendar.")
 
+                elif action == "CREATE_NOTE":
 
+                    note_created = self.create_note(app_call)
+
+                    if note_created:
+                        answer = answer
+                    else:
+                        answer = (
+                            "I'm sorry, I was unable to save your message."
+                        )
 
                 tts_start = time.perf_counter()
 
@@ -542,7 +583,14 @@ class CallServer:
             print()
             print("[AI] Call processing finished.")
 
-def create_appointment_web(forwarding_number, title, date, time, duration):
+def create_appointment_web(
+    forwarding_number,
+    title,
+    date,
+    time,
+    duration,
+    description=None
+):
 
     # url = "https://secretaryweb.onrender.com/api/appointments"
     url = f"{os.getenv('SECRETARYWEB_API_URL')}/api/appointments"
@@ -556,7 +604,8 @@ def create_appointment_web(forwarding_number, title, date, time, duration):
         "title": title,
         "date": date,
         "time": time,
-        "duration": duration
+        "duration": duration,
+        "description": description
     }
 
     response = requests.post(
@@ -571,6 +620,39 @@ def create_appointment_web(forwarding_number, title, date, time, duration):
     print("Status:", response.status_code)
     print("Body:", response.text)
     print("==========================================")
+
+    return response
+
+def create_note_web(
+    forwarding_number,
+    text,
+    caller_number=None
+):
+
+    url = f"{os.getenv('SECRETARYWEB_API_URL')}/api/notes"
+
+    headers = {
+        "Authorization": f"Bearer {os.getenv('SECRETARY_API_KEY')}"
+    }
+
+    payload = {
+        "forwardingNumber": forwarding_number,
+        "text": text,
+        "callerNumber": caller_number
+    }
+
+    response = requests.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=10
+    )
+
+    print()
+    print("=== SECRETARYWEB NOTE RESPONSE ===")
+    print("Status:", response.status_code)
+    print("Body:", response.text)
+    print("===================================")
 
     return response
 

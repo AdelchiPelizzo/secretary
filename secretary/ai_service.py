@@ -142,6 +142,7 @@ def ask_ai(call, message):
             # f"spoken_date = {spoken_date}\n"
             f"time = {appointment['time']}\n"
             f"duration_minutes = {appointment['duration_minutes']}\n"
+            f"description = {appointment['description']}\n"
             f"alternatives = {appointment['alternatives']}\n\n"
 
             "If the caller wants an appointment, collect the required "
@@ -157,7 +158,8 @@ def ask_ai(call, message):
             "Required information:\n"
             "- title\n"
             "- date\n"
-            "- time\n\n"
+            "- time\n"
+            "- description when the caller provides a reason, purpose, or other relevant information for the appointment\n\n"
             
             "Date format rule:\n"
             "Always return DATE in YYYY-MM-DD format.\n"
@@ -204,18 +206,25 @@ def ask_ai(call, message):
             "DATE: <value or NONE>\n"
             "TIME: <value or NONE>\n"
             "DURATION: <value or NONE>\n"
+            "DESCRIPTION: <value or NONE>\n"
+            "NOTE: <value or NONE>\n"
             "RESPONSE: <spoken response>\n\n"
 
             "Possible actions:\n"
             "NONE\n"
             "CREATE_APPOINTMENT\n"
+            "CREATE_NOTE\n"
             "CONFIRM_APPOINTMENT\n"
             "APPOINTMENT_CONFIRMED\n"
             "APPOINTMENT_CANCELLED\n"
             "CHOOSING_ALTERNATIVE\n"
 
             "Use CREATE_APPOINTMENT while collecting appointment "
-            "information.\n\n"
+            "information.\n\n"            
+            "When the caller wants to leave a message for a person or pass information "
+            "to someone, and the information does not belong to an appointment, "
+            "use CREATE_NOTE. Put the message to be passed on in the NOTE field. "
+            "Do not create an appointment for such messages.\n\n"
 
             "Use CONFIRM_APPOINTMENT when all required information is "
             "available and you are asking the caller for confirmation.\n\n"
@@ -271,6 +280,9 @@ def ask_ai(call, message):
 
     raw_answer = response.choices[0].message.content.strip()
 
+    print("[LANGUAGE DEBUG] Raw AI response:")
+    print(raw_answer)
+
     print()
     print("AI raw response:")
     print(raw_answer)
@@ -315,9 +327,20 @@ def ask_ai(call, message):
                 except ValueError:
                     pass
 
+        elif line.startswith("DESCRIPTION:"):
+            value = line.replace("DESCRIPTION:", "", 1).strip()
+
+            if value.upper() != "NONE":
+                appointment["description"] = value
+
+        elif line.startswith("NOTE:"):
+            value = line.replace("NOTE:", "", 1).strip()
+
+            if value.upper() != "NONE":
+                call.note = value
+
         elif line.startswith("RESPONSE:"):
             answer = line.replace("RESPONSE:", "", 1).strip()
-
     if action == "CREATE_APPOINTMENT":
         call.appointment_status = "COLLECTING"
     elif action == "CONFIRM_APPOINTMENT":
