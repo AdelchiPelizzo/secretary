@@ -9,7 +9,9 @@ import numpy as np
 import soundfile as sf
 import uvicorn
 
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
+import asyncio
+import base64
 from dotenv import load_dotenv
 
 from secretary.api import app as api_app
@@ -94,6 +96,13 @@ class CallServer:
         if not called_number:
             return None
         return called_number.split(":")[1].split("@")[0]
+
+    def extract_caller_number(self, caller_number):
+
+        if not caller_number:
+            return None
+
+        return caller_number.split(":")[1].split("@")[0]
 
     def check_appointment_availability(self, call):
 
@@ -254,25 +263,9 @@ class CallServer:
         if source_rate == target_rate:
             return audio
 
-        duration = len(audio) / source_rate
+        from scipy.signal import resample_poly
 
-        new_length = int(
-            duration * target_rate
-        )
-
-        old_indices = np.arange(len(audio))
-
-        new_indices = np.linspace(
-            0,
-            len(audio) - 1,
-            new_length
-        )
-
-        return np.interp(
-            new_indices,
-            old_indices,
-            audio
-        ).astype(np.float32)
+        return resample_poly(audio, target_rate, source_rate).astype(np.float32)
 
     def wait_for_speech(self, audio_port):
 
@@ -349,93 +342,94 @@ class CallServer:
 
         return audio
 
-    def text_to_speech_to_sip(
-        self,
-        text,
-        audio_port
-    ):
+    def text_to_speech_to_sip(self, text, audio_port):
 
         filename = "ai_response.wav"
 
         print()
         print("[TTS] Generating AI speech...")
+        print("[TTS] Text:", text)
 
         tts_generation_start = time.perf_counter()
 
-        response = client.audio.speech.create(model="gpt-4o-mini-tts", voice="coral", input=text)
+        async_client = AsyncOpenAI()
 
-        response.write_to_file(filename)
+        async def generate_realtime_audio():
+
+            async with async_client.realtime.connect(model="gpt-realtime-2.1-mini") as connection:
+
+                await connection.session.update(session={"type": "realtime", "output_modalities": ["audio"],
+                    "instructions": ("Speak the user's message exactly as provided. "
+                                     "Do not answer it, interpret it, or add anything. "
+                                     "The user's message is the exact text that must be spoken."),
+                    "audio": {"output": {"format": {"type": "audio/pcm", "rate": 24000}, "voice": "coral"}}})
+
+                await connection.conversation.item.create(
+                    item={"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]})
+
+                await connection.response.create()
+
+                audio_chunks = []
+
+                async for event in connection:
+
+                    if event.type == "response.output_audio.delta":
+                        audio_chunks.append(base64.b64decode(event.delta))
+
+                    elif event.type == "response.done":
+                        break
+
+                return b"".join(audio_chunks)
+
+        pcm24 = asyncio.run(generate_realtime_audio())
 
         tts_generation_end = time.perf_counter()
 
         print("[TIMING] TTS generation:", round(tts_generation_end - tts_generation_start, 3), "seconds")
 
-        data, samplerate = sf.read(
-            filename,
-            dtype="float32"
-        )
+        data = np.frombuffer(pcm24, dtype=np.int16).astype(np.float32) / 32768.0
+
+        samplerate = 24000
 
         print("[TTS] Original samplerate:", samplerate)
         print("[TTS] Original samples:", len(data))
+        print("[TTS] Original peak:", np.max(np.abs(data)))
 
-        # Make mono.
         if data.ndim > 1:
-            data = np.mean(
-                data,
-                axis=1
-            )
+            data = np.mean(data, axis=1)
 
-        # Convert OpenAI TTS sample rate to SIP rate.
-        data = self.resample(
-            data,
-            samplerate,
-            8000
-        )
+        original_data = data
 
-        data = data * 3.0
+        data = self.resample(original_data, samplerate, 8000)
 
-        # Convert float32 [-1,1] to int16.
-        data = np.clip(
-            data,
-            -1.0,
-            1.0
-        )
+        data = data * 2.25
 
-        pcm = (
-            data * 32767
-        ).astype(np.int16)
+        data = np.clip(data, -1.0, 1.0)
+
+        pcm = (data * 32767).astype(np.int16)
 
         raw = pcm.tobytes()
 
         print("[TTS] Sending speech to caller...")
-
         print("[TTS] PCM samples:", len(pcm))
         print("[TTS] PCM peak:", np.max(np.abs(pcm)))
 
-        # Feed 20 ms chunks into PJSIP.
-        for position in range(
-            0,
-            len(raw),
-            320 * 2
-        ):
+        for position in range(0, len(raw), 320 * 2):
+            chunk = raw[position:
+                        position + 320 * 2]
 
-            chunk = raw[
-                position:
-                position + 320 * 2
-            ]
+            audio_port.output_queue.put(chunk)
 
-            audio_port.output_queue.put(
-                chunk
-            )
         print("[TTS] Queue size after feeding:", audio_port.output_queue.qsize())
-        # Wait until all generated audio has been consumed.
+
         while not audio_port.output_queue.empty():
             time.sleep(0.02)
 
-        # Discard audio captured while AI was speaking.
         while not audio_port.input_queue.empty():
+
             try:
                 audio_port.input_queue.get_nowait()
+
             except queue.Empty:
                 break
 

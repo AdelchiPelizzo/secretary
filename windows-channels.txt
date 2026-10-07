@@ -6,8 +6,15 @@ C:\Users\adpel\PycharmProjects\PythonProject\Secretary
 
 2. Run this command to list the current PJSIP audio devices:
 
+the whole command to modify sip params
+python -c "from secretary import pjsua2 as pj; from pathlib import Path; import re; p=Path('secretary/sip.py'); backup=p.with_suffix('.py.bak'); backup.write_bytes(p.read_bytes()); ep=pj.Endpoint(); ep.libCreate(); ep.libInit(pj.EpConfig()); devs=ep.audDevManager().enumDev(); cap=next((i for i,d in enumerate(devs) if d.name=='CABLE-A Output (VB-Audio Cable A)' and d.inputCount>0),None); play=next((i for i,d in enumerate(devs) if d.name=='CABLE Input (VB-Audio Virtual Cable)' and d.outputCount>0),None); print(f'Capture device: {cap}'); print(f'Playback device: {play}'); s=p.read_text(); s,n1=re.subn(r'setCaptureDev\(\d+\)',f'setCaptureDev({cap})',s,count=1) if cap is not None else (s,0); s,n2=re.subn(r'setPlaybackDev\(\d+\)',f'setPlaybackDev({play})',s,count=1) if play is not None else (s,0); p.write_text(s); print(f'Capture line updated: {n1}'); print(f'Playback line updated: {n2}'); print(f'Backup: {backup}'); ep.libDestroy()"
+
+
+
 cd C:\Users\adpel\PycharmProjects\PythonProject\Secretary\secretary
 python -c "import pjsua2; ep=pjsua2.Endpoint(); ep.libCreate(); ep.libInit(pjsua2.EpConfig()); ep.libStart(); mgr=ep.audDevManager(); [print(f'{i}: {mgr.getDevInfo(i).name:<500}') for i in range(mgr.getDevCount())]; ep.libDestroy()"
+
+> python -c "import sounddevice as sd; [print(i, d['name'], 'in=', d['max_input_channels'], 'out=', d['max_output_channels']) for i,d in enumerate(sd.query_devices())]"
 
 3. Find these two devices in the output:
 

@@ -124,7 +124,9 @@ class SecretaryAccount(pj.Account):
         print("[SIP] Local URI:", call_info.localUri)
 
         app_call = self.server.receive_call(
-            caller_number=call_info.remoteUri,
+            caller_number=self.server.extract_caller_number(
+                call_info.remoteUri
+            ),
             called_number=call_info.localUri
         )
 
