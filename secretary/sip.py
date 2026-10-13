@@ -4,6 +4,7 @@ import time
 
 from secretary import pjsua2 as pj
 from dotenv import load_dotenv
+from datetime import datetime
 
 
 SERVER = "sip.vivavox.it"
@@ -129,6 +130,47 @@ class SecretaryAccount(pj.Account):
             ),
             called_number=call_info.localUri
         )
+
+        # Reject calls if business access cannot be verified
+        config = getattr(app_call, "secretary_config", None)
+
+        if not config:
+            print("[SIP] REJECTED: Secretary configuration unavailable")
+
+            reject = pj.CallOpParam()
+            reject.statusCode = 403
+            call.answer(reject)
+            return
+
+        payment_status = config.get("paymentStatus")
+        now = datetime.now()
+
+        def is_expired(value):
+            if not value:
+                return True
+
+            try:
+                expiry = datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+                current_time = (datetime.now(expiry.tzinfo) if expiry.tzinfo else datetime.now())
+
+                return expiry <= current_time
+
+            except (ValueError, TypeError, AttributeError):
+                return True
+
+        expired = (payment_status == "expired" or (
+                payment_status == "trial" and is_expired(config.get("trialEndsAt"))) or (
+                           payment_status == "valid" and config.get("paymentValidUntil") and is_expired(
+                       config.get("paymentValidUntil"))))
+
+        if expired:
+            print("[SIP] REJECTED: Business trial or payment expired")
+
+            reject = pj.CallOpParam()
+            reject.statusCode = 403
+            call.answer(reject)
+            return
 
         call.app_call = app_call
         call.audio_port = app_call.audio_port

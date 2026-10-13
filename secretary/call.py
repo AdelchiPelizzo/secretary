@@ -1,24 +1,4 @@
-# class Call:
-#
-#     def __init__(self, call_id, caller_number=None, called_number=None):
-#         self.call_id = call_id
-#         self.caller_number = caller_number
-#         self.called_number = called_number
-#         self.language = None
-#         self.messages = []
-#
-#         self.appointment = {
-#             "title": None,
-#             "date": None,
-#             "time": None,
-#             "duration_minutes": None
-#         }
-#
-#         self.appointment_status = "NONE"
-
 import queue
-import threading
-
 import numpy as np
 import sounddevice as sd
 
@@ -51,14 +31,10 @@ def find_device(name, input_device=True):
 
 
 class AudioBridge:
-
     def __init__(self):
-
         self.input_queue = queue.Queue()
         self.output_queue = queue.Queue()
-
         self.running = False
-
         self.input_stream = None
         self.output_stream = None
 
@@ -183,7 +159,6 @@ class Call:
         self.messages = []
         self.secretary_config = {}
         self.note = None
-
         self.appointment = {
             "title": None,
             "date": None,
@@ -196,3 +171,4 @@ class Call:
         self.appointment_status = "NONE"
 
         self.audio_port = AudioBridge()
+

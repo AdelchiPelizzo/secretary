@@ -6,7 +6,6 @@ import time
 import requests
 
 import numpy as np
-import soundfile as sf
 import uvicorn
 
 from openai import OpenAI, AsyncOpenAI
@@ -370,10 +369,17 @@ class CallServer:
                 await connection.response.create()
 
                 audio_chunks = []
+                first_audio_received = False
 
                 async for event in connection:
 
                     if event.type == "response.output_audio.delta":
+
+                        if not first_audio_received:
+                            print("[TIMING] First TTS audio received:",
+                                round(time.perf_counter() - tts_generation_start, 3), "seconds")
+                            first_audio_received = True
+
                         audio_chunks.append(base64.b64decode(event.delta))
 
                     elif event.type == "response.done":
@@ -414,6 +420,12 @@ class CallServer:
         print("[TTS] PCM samples:", len(pcm))
         print("[TTS] PCM peak:", np.max(np.abs(pcm)))
 
+        while not audio_port.output_queue.empty():
+            try:
+                audio_port.output_queue.get_nowait()
+            except queue.Empty:
+                break
+
         for position in range(0, len(raw), 320 * 2):
             chunk = raw[position:
                         position + 320 * 2]
@@ -442,6 +454,7 @@ class CallServer:
 
         print()
         print("[AI] Call processing started.")
+        print("[TIMING] process_call started:", time.perf_counter())
 
         # Initial greeting
         greeting = app_call.secretary_config.get("greeting", "Hello, how can I help you?")
@@ -683,6 +696,20 @@ def check_appointment_web(forwarding_number, title, date, time, duration):
 
     return response
 
+def ping_secretary_web():
+    while True:
+        try:
+            url = os.getenv("SECRETARYWEB_API_URL")
+
+            if url:
+                requests.get(url, timeout=5)
+                print("[RENDER] Ping sent.")
+
+        except Exception as e:
+            print("[RENDER] Ping failed:", e)
+
+        time.sleep(600)
+
 def get_secretary_config(forwarding_number):
     try:
         # url = "https://secretaryweb.onrender.com/api/secretary-config"
@@ -719,6 +746,11 @@ def start_http_server():
 
 server = CallServer()
 server.sip = SipServer(server)
+
+threading.Thread(
+    target=ping_secretary_web,
+    daemon=True
+).start()
 
 try:
     threading.Thread(
