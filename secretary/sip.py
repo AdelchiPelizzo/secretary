@@ -196,28 +196,17 @@ class SecretaryAccount(pj.Account):
         print("[SIP] CALL ANSWERED")
 
 
+
 class SipServer:
 
     def __init__(self, server):
 
         self.server = server
-
-        load_dotenv()
-
-        self.username = os.getenv(
-            "VIVAVOX_USERNAME"
-        )
-
-        self.password = os.getenv(
-            "VIVAVOX_PASSWORD"
-        )
-
-        self.number = os.getenv(
-            "VIVAVOX_NUMBER"
-        )
+        self.registrations = []
 
         self.ep = None
         self.acc = None
+        self.accounts = []
 
     def start(self):
 
@@ -241,7 +230,6 @@ class SipServer:
         self.ep.libInit(ep_cfg)
 
         transport_cfg = pj.TransportConfig()
-
         transport_cfg.port = PORT
 
         self.ep.transportCreate(
@@ -269,61 +257,78 @@ class SipServer:
         print("[SIP] Audio devices configured:")
         print("[SIP] Capture: CABLE Output")
         print("[SIP] Playback: CABLE Input")
-
         print("[SIP] PJSIP started.")
 
-        account_cfg = pj.AccountConfig()
+        for registration in self.registrations:
 
-        account_cfg.idUri = (
-            f"sip:{self.username}@{SERVER}"
-        )
+            sip_data = registration.get("sip", {})
 
-        account_cfg.regConfig.registrarUri = (
-            f"sip:{SERVER}:{PORT}"
-        )
+            username = sip_data.get("username")
+            password = sip_data.get("password")
+            host = sip_data.get("host") or SERVER
+            port = int(sip_data.get("port") or PORT)
+            transport = (sip_data.get("transport") or "UDP").upper()
 
-        credentials = pj.AuthCredInfo(
-            "digest",
-            "*",
-            self.username,
-            0,
-            self.password
-        )
+            if not sip_data.get("active"):
+                continue
 
-        account_cfg.sipConfig.authCreds.append(
-            credentials
-        )
+            if not username or not password:
+                print(
+                    "[SIP] Skipping account with missing credentials:",
+                    registration.get("number")
+                )
+                continue
 
-        self.acc = SecretaryAccount(self.server)
+            if transport != "UDP":
+                print(
+                    "[SIP] Skipping unsupported transport:",
+                    transport
+                )
+                continue
 
-        self.acc.create(
-            account_cfg
-        )
+            account_cfg = pj.AccountConfig()
+            account_cfg.idUri = f"sip:{username}@{host}"
+            account_cfg.regConfig.registrarUri = f"sip:{host}:{port}"
 
-        print("[SIP] Account created.")
+            credentials = pj.AuthCredInfo(
+                "digest",
+                "*",
+                username,
+                0,
+                password
+            )
+            account_cfg.sipConfig.authCreds.append(credentials)
 
-        print(
-            "[SIP] Waiting for registration..."
-        )
+            account = SecretaryAccount(self.server)
+            account.create(account_cfg)
+            self.accounts.append(account)
+
+            print(
+                "[SIP] Account created for number:",
+                registration.get("number")
+            )
+
+        if not self.accounts:
+            raise RuntimeError(
+                "No valid active SIP accounts were created."
+            )
+
+        # Preserve compatibility with existing code expecting self.acc.
+        self.acc = self.accounts[0]
+
+        print("[SIP] Waiting for registration...")
 
     def run(self):
 
         try:
-
             while True:
-
-                self.ep.libHandleEvents(
-                    50
-                )
-
-                time.sleep(
-                    0.01
-                )
+                self.ep.libHandleEvents(50)
+                time.sleep(0.01)
 
         except KeyboardInterrupt:
-
             print()
             print("[SIP] Stopping...")
+
 
     def stop(self):
 

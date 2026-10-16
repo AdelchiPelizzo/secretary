@@ -737,6 +737,41 @@ def get_secretary_config(forwarding_number):
         print("[CONFIG] Failed to get secretary config:", e)
         return None
 
+
+def get_sip_registrations():
+    """Fetch active SIP registration accounts from SecretaryWeb."""
+    try:
+        base_url = os.getenv("SECRETARYWEB_API_URL", "").rstrip("/")
+        api_key = os.getenv("SECRETARY_API_KEY", "")
+
+        if not base_url or not api_key:
+            print("[SIP CONFIG] Missing SECRETARYWEB_API_URL or SECRETARY_API_KEY")
+            return None
+
+        response = requests.get(
+            f"{base_url}/api/sip-registrations",
+            headers={
+                "Authorization": f"Bearer {api_key}"
+            },
+            timeout=10
+        )
+        response.raise_for_status()
+
+        data = response.json()
+        registrations = data.get("registrations")
+
+        if not isinstance(registrations, list):
+            print("[SIP CONFIG] Invalid registrations response")
+            return None
+
+        print(f"[SIP CONFIG] Retrieved {len(registrations)} SIP registration(s)")
+        return registrations
+
+    except Exception as error:
+        print("[SIP CONFIG] Failed to retrieve SIP registrations:", error)
+        return None
+
+
 def start_http_server():
     uvicorn.run(
         api_app,
@@ -758,6 +793,15 @@ try:
         daemon=True
     ).start()
 
+    registrations = get_sip_registrations()
+
+    if registrations is None:
+        raise RuntimeError("Cannot start SIP: failed to retrieve registration data from SecretaryWeb.")
+
+    if not registrations:
+        raise RuntimeError("Cannot start SIP: SecretaryWeb returned no active SIP registrations.")
+
+    server.sip.registrations = registrations
     server.sip.start()
 
     print()
