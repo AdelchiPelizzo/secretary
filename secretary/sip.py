@@ -239,23 +239,51 @@ class SipServer:
 
         self.ep.libStart()
 
-        for i in range(self.ep.audDevManager().getDevCount()):
-            info = self.ep.audDevManager().getDevInfo(i)
-            print(
-                "[PJSIP DEVICE]",
-                i,
-                info.name,
-                "in=",
-                info.inputCount,
-                "out=",
-                info.outputCount
-            )
+        audio = self.ep.audDevManager()
+        device_count = audio.getDevCount()
 
-        self.ep.audDevManager().setCaptureDev(3)
-        self.ep.audDevManager().setPlaybackDev(6)
+        capture_index = None
+        playback_index = None
+
+        for i in range(device_count):
+            info = audio.getDevInfo(i)
+            print("[PJSIP DEVICE]", i, info.name)
+
+            if info.name.startswith("CABLE-A Output") and info.inputCount > 0:
+                capture_index = i
+
+            if info.name.startswith("CABLE Input") and info.outputCount > 0:
+                playback_index = i
+
+        if capture_index is None:
+            raise RuntimeError("CABLE-A Output capture device not found")
+
+        if playback_index is None:
+            raise RuntimeError("CABLE Input playback device not found")
+
+        audio.setCaptureDev(capture_index)
+        audio.setPlaybackDev(playback_index)
+
+        print("[PJSIP] Capture selected:", capture_index)
+        print("[PJSIP] Playback selected:", playback_index)
+
+        # for i in range(self.ep.audDevManager().getDevCount()):
+        #     info = self.ep.audDevManager().getDevInfo(i)
+        #     print(
+        #         "[PJSIP DEVICE]",
+        #         i,
+        #         info.name,
+        #         "in=",
+        #         info.inputCount,
+        #         "out=",
+        #         info.outputCount
+        #     )
+        #
+        # self.ep.audDevManager().setCaptureDev(3)
+        # self.ep.audDevManager().setPlaybackDev(6)
 
         print("[SIP] Audio devices configured:")
-        print("[SIP] Capture: CABLE Output")
+        print("[SIP] Capture: CABLE A Output")
         print("[SIP] Playback: CABLE Input")
         print("[SIP] PJSIP started.")
 
