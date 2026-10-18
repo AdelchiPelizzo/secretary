@@ -3,6 +3,7 @@ import threading
 import time
 
 from secretary import pjsua2 as pj
+from secretary.sip_audio_bridge import SipAudioBridge
 from dotenv import load_dotenv
 from datetime import datetime
 
@@ -49,57 +50,54 @@ class SecretaryCall(pj.Call):
             print("[SIP] RX payload:", si.rxPt)
             print("[SIP] TX payload:", si.txPt)
 
-            if ci.state == pj.PJSIP_INV_STATE_CONFIRMED:
-                am = self.getAudioMedia(0)
-                print("[SIP] Audio port ID:", am.getPortId())
-                pi = am.getPortInfo()
-                print("[SIP] ConfPortInfo fields:", dir(pi))
+            am = self.getAudioMedia(0)
+            print("[SIP] Audio port ID:", am.getPortId())
+            pi = am.getPortInfo()
+            print("[SIP] ConfPortInfo fields:", dir(pi))
 
         print()
         print("[SIP] Call state:", ci.stateText)
 
         if ci.state == pj.PJSIP_INV_STATE_DISCONNECTED:
-
-            if hasattr(self, "audio_port") and self.audio_port is not None:
+            if self.audio_port is not None:
                 self.audio_port.stop()
 
             print("[SIP] Call disconnected.")
 
     def onCallMediaState(self, prm):
+
         ci = self.getInfo()
 
         for mi in ci.media:
-            if mi.type == pj.PJMEDIA_TYPE_AUDIO:
-                if mi.status == pj.PJSUA_CALL_MEDIA_ACTIVE:
-                    audio_media = self.getAudioMedia(mi.index)
+            if (
+                mi.type == pj.PJMEDIA_TYPE_AUDIO
+                and mi.status == pj.PJSUA_CALL_MEDIA_ACTIVE
+            ):
+                if self.audio_port is None:
+                    print("[SIP] ERROR: No audio bridge assigned to this call")
+                    continue
 
-                    print("[SIP] Connecting call audio to sound device...")
+                audio_media = self.getAudioMedia(mi.index)
 
-                    print("[DEBUG] account.server:", self.account.server)
-                    print("[DEBUG] account.server type:", type(self.account.server))
+                # Received SIP audio -> this call's dedicated bridge.
+                audio_media.startTransmit(self.audio_port)
 
-                    print("[SIP] BEFORE call -> playback")
+                # This call's dedicated bridge -> outgoing SIP audio.
+                self.audio_port.startTransmit(audio_media)
 
-                    print("[DEBUG] sip_server:", self.account.server.sip_server)
-                    print("[DEBUG] sip_server type:", type(self.account.server.sip_server))
-
-                    audio_media.startTransmit(
-                        self.account.server.sip.ep.audDevManager().getPlaybackDevMedia()
-                    )
-
-                    print("[SIP] AFTER call -> playback")
-
-                    # Leave capture connection commented out for this test
-                    self.account.server.sip.ep.audDevManager().getCaptureDevMedia().startTransmit(audio_media)
-
-                    print("[SIP] Audio media port:", audio_media.getPortId())
-                    print("[SIP] Audio media info:", audio_media.getPortInfo())
+                print(
+                    "[SIP] Connected isolated audio bridge:",
+                    self.audio_port.bridge_id,
+                    "media index:",
+                    mi.index
+                )
+                print("[SIP] Audio media port:", audio_media.getPortId())
+                print("[SIP] Audio media info:", audio_media.getPortInfo())
 
 
 class SecretaryAccount(pj.Account):
 
     def __init__(self, server):
-
         super().__init__()
 
         self.server = server
@@ -131,7 +129,7 @@ class SecretaryAccount(pj.Account):
             called_number=call_info.localUri
         )
 
-        # Reject calls if business access cannot be verified
+        # Reject calls if business access cannot be verified.
         config = getattr(app_call, "secretary_config", None)
 
         if not config:
@@ -143,26 +141,39 @@ class SecretaryAccount(pj.Account):
             return
 
         payment_status = config.get("paymentStatus")
-        now = datetime.now()
 
         def is_expired(value):
             if not value:
                 return True
 
             try:
-                expiry = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                expiry = datetime.fromisoformat(
+                    value.replace("Z", "+00:00")
+                )
 
-                current_time = (datetime.now(expiry.tzinfo) if expiry.tzinfo else datetime.now())
+                current_time = (
+                    datetime.now(expiry.tzinfo)
+                    if expiry.tzinfo
+                    else datetime.now()
+                )
 
                 return expiry <= current_time
 
             except (ValueError, TypeError, AttributeError):
                 return True
 
-        expired = (payment_status == "expired" or (
-                payment_status == "trial" and is_expired(config.get("trialEndsAt"))) or (
-                           payment_status == "valid" and config.get("paymentValidUntil") and is_expired(
-                       config.get("paymentValidUntil"))))
+        expired = (
+            payment_status == "expired"
+            or (
+                payment_status == "trial"
+                and is_expired(config.get("trialEndsAt"))
+            )
+            or (
+                payment_status == "valid"
+                and config.get("paymentValidUntil")
+                and is_expired(config.get("paymentValidUntil"))
+            )
+        )
 
         if expired:
             print("[SIP] REJECTED: Business trial or payment expired")
@@ -172,21 +183,19 @@ class SecretaryAccount(pj.Account):
             call.answer(reject)
             return
 
+        # Create a dedicated PJSIP media port for this accepted call.
+        app_call.audio_port = SipAudioBridge()
+
         call.app_call = app_call
         call.audio_port = app_call.audio_port
 
-        self.active_calls[
-            prm.callId
-        ] = call
+        self.active_calls[prm.callId] = call
 
         answer = pj.CallOpParam()
-
         answer.statusCode = 200
-
         call.answer(answer)
 
-        call.audio_port.start()
-
+        # SipAudioBridge is a PJSIP media port, not a sounddevice stream.
         threading.Thread(
             target=self.server.process_call,
             args=(call,),
@@ -194,7 +203,6 @@ class SecretaryAccount(pj.Account):
         ).start()
 
         print("[SIP] CALL ANSWERED")
-
 
 
 class SipServer:
@@ -216,13 +224,12 @@ class SipServer:
         print("=========================================")
 
         self.ep = pj.Endpoint()
-
         self.ep.libCreate()
 
         ep_cfg = pj.EpConfig()
         ep_cfg.uaConfig.threadCnt = 0
 
-        # NAT / STUN
+        # NAT / STUN settings preserved.
         ep_cfg.uaConfig.natTypeInSdp = 1
         ep_cfg.uaConfig.stunServer.append("stun.l.google.com:19302")
         ep_cfg.uaConfig.stunIgnoreFailure = False
@@ -249,10 +256,16 @@ class SipServer:
             info = audio.getDevInfo(i)
             print("[PJSIP DEVICE]", i, info.name)
 
-            if info.name.startswith("CABLE-A Output") and info.inputCount > 0:
+            if (
+                info.name.startswith("CABLE-A Output")
+                and info.inputCount > 0
+            ):
                 capture_index = i
 
-            if info.name.startswith("CABLE Input") and info.outputCount > 0:
+            if (
+                info.name.startswith("CABLE Input")
+                and info.outputCount > 0
+            ):
                 playback_index = i
 
         if capture_index is None:
@@ -266,21 +279,6 @@ class SipServer:
 
         print("[PJSIP] Capture selected:", capture_index)
         print("[PJSIP] Playback selected:", playback_index)
-
-        # for i in range(self.ep.audDevManager().getDevCount()):
-        #     info = self.ep.audDevManager().getDevInfo(i)
-        #     print(
-        #         "[PJSIP DEVICE]",
-        #         i,
-        #         info.name,
-        #         "in=",
-        #         info.inputCount,
-        #         "out=",
-        #         info.outputCount
-        #     )
-        #
-        # self.ep.audDevManager().setCaptureDev(3)
-        # self.ep.audDevManager().setPlaybackDev(6)
 
         print("[SIP] Audio devices configured:")
         print("[SIP] Capture: CABLE A Output")
@@ -357,22 +355,14 @@ class SipServer:
             print()
             print("[SIP] Stopping...")
 
-
     def stop(self):
 
-        print(
-            "[SIP] Shutting down."
-        )
+        print("[SIP] Shutting down.")
 
         if self.acc:
-
             self.acc.shutdown()
-
             self.acc = None
 
         if self.ep:
-
             self.ep.libDestroy()
-
             self.ep = None
-

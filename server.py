@@ -393,7 +393,7 @@ class CallServer:
 
         print("[TIMING] TTS generation:", round(tts_generation_end - tts_generation_start, 3), "seconds")
 
-        data = np.frombuffer(pcm24, dtype=np.int16).astype(np.float32) / 32768.0
+        data = (np.frombuffer(pcm24, dtype=np.int16).astype(np.float32) / 32768.0)
 
         samplerate = 24000
 
@@ -409,39 +409,50 @@ class CallServer:
         data = self.resample(original_data, samplerate, 8000)
 
         data = data * 2.25
-
         data = np.clip(data, -1.0, 1.0)
 
         pcm = (data * 32767).astype(np.int16)
-
         raw = pcm.tobytes()
 
         print("[TTS] Sending speech to caller...")
         print("[TTS] PCM samples:", len(pcm))
         print("[TTS] PCM peak:", np.max(np.abs(pcm)))
 
+        # Remove any audio left over from a previous TTS operation.
         while not audio_port.output_queue.empty():
             try:
                 audio_port.output_queue.get_nowait()
             except queue.Empty:
                 break
 
-        for position in range(0, len(raw), 320 * 2):
-            chunk = raw[position:
-                        position + 320 * 2]
+        # Start timing when the audio is queued for SIP playback.
+        playback_start = time.perf_counter()
 
+        # Each 320-sample chunk is 640 bytes: 20 ms at 8 kHz, mono, int16.
+        for position in range(0, len(raw), 320 * 2):
+            chunk = raw[position:position + 320 * 2]
             audio_port.output_queue.put(chunk)
 
         print("[TTS] Queue size after feeding:", audio_port.output_queue.qsize())
 
-        while not audio_port.output_queue.empty():
+        # Wait for queued and pending audio data to be consumed.
+        while (not audio_port.output_queue.empty() or audio_port.pending_output):
             time.sleep(0.02)
 
-        while not audio_port.input_queue.empty():
+        # Ensure at least the expected audio duration has elapsed.
+        playback_duration = len(pcm) / 8000
+        elapsed = time.perf_counter() - playback_start
+        remaining = playback_duration - elapsed
 
+        if remaining > 0:
+            time.sleep(remaining + 0.15)
+
+        print("[TTS] Playback wait:", round(time.perf_counter() - playback_start, 2), "seconds")
+
+        # Discard caller audio captured during the greeting.
+        while not audio_port.input_queue.empty():
             try:
                 audio_port.input_queue.get_nowait()
-
             except queue.Empty:
                 break
 
