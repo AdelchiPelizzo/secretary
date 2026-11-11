@@ -36,6 +36,44 @@ def ask_ai(call, message):
 
     appointment = call.appointment
 
+    calendar_connected = call.secretary_config.get("calendarConnected") is True
+
+    if calendar_connected:
+        calendar_instruction = ("The business has a connected calendar. "
+                                "Follow the normal appointment workflow. "
+                                "If no suitable appointment or alternative is available, "
+                                "explain this naturally in the current conversation language "
+                                "and offer to take a message for the business.")
+    else:
+        calendar_instruction = ("IMPORTANT: This business does NOT have a connected calendar. "
+                                "Never offer to check availability or claim that you checked it. "
+                                "Never use CREATE_APPOINTMENT, CONFIRM_APPOINTMENT, "
+                                "APPOINTMENT_CONFIRMED, or CHOOSING_ALTERNATIVE. "
+
+                                "If the caller asks to book an appointment, apologise briefly "
+                                "and explain naturally in the current conversation language "
+                                "that you cannot create appointments automatically at the moment. "
+                                "Then simply offer to take a message, without specifying "
+                                "who or where the message will be delivered. "
+                                "Do not ask for the appointment type, date, or time. "
+                                "Do not offer to collect an appointment request. "
+
+                                "If the caller accepts the offer, invite them to dictate the "
+                                "actual message or appointment request. Do not save their "
+                                "acceptance or their question about leaving a message. "
+
+                                "If the caller independently asks to leave a message, "
+                                "welcome the request and invite them to dictate it. "
+
+                                "Once the caller provides the actual message or appointment "
+                                "request, use CREATE_NOTE and put only the content intended "
+                                "for the business in the NOTE field. "
+
+                                "In RESPONSE, confirm naturally in the current conversation "
+                                "language that the message has been passed to the business. "
+                                "Never claim that an appointment has been booked or confirmed. "
+                                "These instructions override all other appointment instructions.")
+
     previous_appointment_status = call.appointment_status
 
     spoken_date = appointment["date"]
@@ -221,10 +259,15 @@ def ask_ai(call, message):
 
             "Use CREATE_APPOINTMENT while collecting appointment "
             "information.\n\n"            
-            "When the caller wants to leave a message for a person or pass information "
+                        "When the caller wants to leave a message for a person or pass information "
             "to someone, and the information does not belong to an appointment, "
-            "use CREATE_NOTE. Put the message to be passed on in the NOTE field. "
-            "Do not create an appointment for such messages.\n\n"
+            "invite the caller to dictate the actual message if they have not "
+            "provided its content yet. Do not use CREATE_NOTE when the caller "
+            "only asks whether they can leave a message, says they want to leave "
+            "one, or accepts an invitation to leave one. Wait until the caller "
+            "actually provides the information intended for the business. "
+            "Only then use CREATE_NOTE and put only that actual message content "
+            "in the NOTE field. Do not create an appointment for such messages.\n\n"
 
             "Use CONFIRM_APPOINTMENT when all required information is "
             "available and you are asking the caller for confirmation.\n\n"
@@ -265,6 +308,7 @@ def ask_ai(call, message):
             "TIME: NONE\n"
             "DURATION: NONE\n"
             "RESPONSE: No problem. I won't add the appointment."
+            f"\n\nCalendar availability rule:\n{calendar_instruction}\n"
         )
     }]
 
@@ -289,6 +333,7 @@ def ask_ai(call, message):
 
     action = "NONE"
     answer = raw_answer
+    call.note = None
 
     for line in raw_answer.splitlines():
         if line.startswith("LANGUAGE:"):
@@ -396,6 +441,36 @@ def generate_availability_response(call, alternatives):
 
             "Available alternatives:\n"
             f"{formatted_slots}\n\n"
+
+            "Return only the spoken response. "
+            "Do not include labels, explanations, or technical information."
+        )
+    }]
+
+    response = client.chat.completions.create(
+        model="gpt-5.4-mini",
+        messages=messages
+    )
+
+    return response.choices[0].message.content.strip()
+
+def generate_appointment_unavailable_response(call):
+    messages = [{
+        "role": "system",
+        "content": (
+            "You are a professional and friendly telephone secretary. "
+            "Respond in the caller's current language. "
+            "Speak naturally and concisely, as the response will be spoken aloud.\n\n"
+
+            "The appointment could not be completed. "
+            "Explain briefly that you cannot complete the appointment "
+            "and offer to take a message for the business so someone "
+            "can follow up with the caller. "
+            "Ask whether the caller would like to leave a message. "
+            "Do not claim that an appointment has been booked or confirmed.\n\n"
+
+            "Current conversation language:\n"
+            f"{call.language}\n\n"
 
             "Return only the spoken response. "
             "Do not include labels, explanations, or technical information."

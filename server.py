@@ -20,6 +20,7 @@ from secretary.ai_service import (
     speech_to_text,
     ask_ai,
     generate_availability_response,
+    generate_appointment_unavailable_response,
     generate_appointment_confirmation_response,
     generate_appointment_created_response
 )
@@ -341,19 +342,19 @@ class CallServer:
 
         return audio
 
-    def text_to_speech_to_sip(self, text, audio_port):
-
-        filename = "ai_response.wav"
-
+    def text_to_speech_to_sip(self, text, audio_port, second_text=None, pause_ms=500):
         print()
         print("[TTS] Generating AI speech...")
-        print("[TTS] Text:", text)
+        print("[TTS] First text:", text)
+
+        if second_text:
+            print("[TTS] Second text:", second_text)
 
         tts_generation_start = time.perf_counter()
 
         async_client = AsyncOpenAI()
 
-        async def generate_realtime_audio():
+        async def generate_realtime_audio(text_to_speak):
 
             async with async_client.realtime.connect(model="gpt-realtime-2.1-mini") as connection:
 
@@ -363,23 +364,16 @@ class CallServer:
                                      "The user's message is the exact text that must be spoken."),
                     "audio": {"output": {"format": {"type": "audio/pcm", "rate": 24000}, "voice": "coral"}}})
 
-                await connection.conversation.item.create(
-                    item={"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]})
+                await connection.conversation.item.create(item={"type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": text_to_speak}]})
 
                 await connection.response.create()
 
                 audio_chunks = []
-                first_audio_received = False
 
                 async for event in connection:
 
                     if event.type == "response.output_audio.delta":
-
-                        if not first_audio_received:
-                            print("[TIMING] First TTS audio received:",
-                                round(time.perf_counter() - tts_generation_start, 3), "seconds")
-                            first_audio_received = True
-
                         audio_chunks.append(base64.b64decode(event.delta))
 
                     elif event.type == "response.done":
@@ -387,36 +381,52 @@ class CallServer:
 
                 return b"".join(audio_chunks)
 
-        pcm24 = asyncio.run(generate_realtime_audio())
+        def convert_to_8khz(pcm24):
 
-        tts_generation_end = time.perf_counter()
+            if not pcm24:
+                return np.array([], dtype=np.int16)
 
-        print("[TIMING] TTS generation:", round(tts_generation_end - tts_generation_start, 3), "seconds")
+            data = (np.frombuffer(pcm24, dtype=np.int16).astype(np.float32) / 32768.0)
 
-        data = (np.frombuffer(pcm24, dtype=np.int16).astype(np.float32) / 32768.0)
+            data = self.resample(data, 24000, 8000)
 
-        samplerate = 24000
+            data = data * 2.25
+            data = np.clip(data, -1.0, 1.0)
 
-        print("[TTS] Original samplerate:", samplerate)
-        print("[TTS] Original samples:", len(data))
-        print("[TTS] Original peak:", np.max(np.abs(data)))
+            return (data * 32767).astype(np.int16)
 
-        if data.ndim > 1:
-            data = np.mean(data, axis=1)
+        async def generate_all_audio():
 
-        original_data = data
+            first_audio = await generate_realtime_audio(text)
 
-        data = self.resample(original_data, samplerate, 8000)
+            if second_text:
+                second_audio = await generate_realtime_audio(second_text)
+            else:
+                second_audio = b""
 
-        data = data * 2.25
-        data = np.clip(data, -1.0, 1.0)
+            return first_audio, second_audio
 
-        pcm = (data * 32767).astype(np.int16)
-        raw = pcm.tobytes()
+        first_pcm24, second_pcm24 = asyncio.run(generate_all_audio())
 
-        print("[TTS] Sending speech to caller...")
-        print("[TTS] PCM samples:", len(pcm))
-        print("[TTS] PCM peak:", np.max(np.abs(pcm)))
+        first_pcm = convert_to_8khz(first_pcm24)
+        second_pcm = convert_to_8khz(second_pcm24)
+
+        if second_text:
+            # Insert exact digital silence between the two segments.
+            silence_samples = int(8000 * pause_ms / 1000)
+
+            silence = np.zeros(silence_samples, dtype=np.int16)
+
+            combined_pcm = np.concatenate([first_pcm, silence, second_pcm])
+        else:
+            combined_pcm = first_pcm
+
+        raw = combined_pcm.tobytes()
+
+        print("[TIMING] TTS generation:", round(time.perf_counter() - tts_generation_start, 3), "seconds")
+
+        print("[TTS] Combined audio samples:", len(combined_pcm))
+        print("[TTS] Pause:", pause_ms if second_text else 0, "ms")
 
         # Remove any audio left over from a previous TTS operation.
         while not audio_port.output_queue.empty():
@@ -425,22 +435,23 @@ class CallServer:
             except queue.Empty:
                 break
 
-        # Start timing when the audio is queued for SIP playback.
         playback_start = time.perf_counter()
 
-        # Each 320-sample chunk is 640 bytes: 20 ms at 8 kHz, mono, int16.
-        for position in range(0, len(raw), 320 * 2):
-            chunk = raw[position:position + 320 * 2]
-            audio_port.output_queue.put(chunk)
+        # Preserve the existing 640-byte queue chunks.
+        # The audio bridge handles conversion to 320-byte frames.
+        chunk_size = 320 * 2
+
+        for position in range(0, len(raw), chunk_size):
+            audio_port.output_queue.put(raw[position:position + chunk_size])
 
         print("[TTS] Queue size after feeding:", audio_port.output_queue.qsize())
 
-        # Wait for queued and pending audio data to be consumed.
+        # Wait until queued and pending audio has been played.
         while (not audio_port.output_queue.empty() or audio_port.pending_output):
             time.sleep(0.02)
 
-        # Ensure at least the expected audio duration has elapsed.
-        playback_duration = len(pcm) / 8000
+        # Ensure the complete audio duration has elapsed.
+        playback_duration = len(combined_pcm) / 8000
         elapsed = time.perf_counter() - playback_start
         remaining = playback_duration - elapsed
 
@@ -449,7 +460,7 @@ class CallServer:
 
         print("[TTS] Playback wait:", round(time.perf_counter() - playback_start, 2), "seconds")
 
-        # Discard caller audio captured during the greeting.
+        # Discard caller audio captured while the speech was playing.
         while not audio_port.input_queue.empty():
             try:
                 audio_port.input_queue.get_nowait()
@@ -468,9 +479,14 @@ class CallServer:
         print("[TIMING] process_call started:", time.perf_counter())
 
         # Initial greeting
-        greeting = app_call.secretary_config.get("greeting", "Hello, how can I help you?")
+        business_name = app_call.secretary_config.get("businessName", "").strip()
 
-        self.text_to_speech_to_sip(greeting, audio_port)
+        custom_greeting = app_call.secretary_config.get("greeting", "Hello, how can I help you?").strip()
+
+        if business_name:
+            self.text_to_speech_to_sip(business_name, audio_port, second_text=custom_greeting, pause_ms=500)
+        else:
+            self.text_to_speech_to_sip(custom_greeting, audio_port)
 
         try:
 
@@ -517,6 +533,27 @@ class CallServer:
 
                 action, answer = ask_ai(app_call, message)
 
+                calendar_connected = (
+                    app_call.secretary_config.get("calendarConnected") is True
+                )
+
+                print(f"[CALENDAR] Connected status received: {calendar_connected}")
+
+                # Safety guard: never process appointment actions without a connected calendar.
+                appointment_actions = (
+                    "CREATE_APPOINTMENT",
+                    "CONFIRM_APPOINTMENT",
+                    "APPOINTMENT_CONFIRMED",
+                    "CHOOSING_ALTERNATIVE"
+                )
+
+                if not calendar_connected and action in appointment_actions:
+                    action = "NONE"
+                    answer = generate_appointment_unavailable_response(app_call)
+
+                    print("[CALENDAR] No connected calendar. "
+                          "Blocked appointment action and offered to take a message.")
+
                 ai_end = time.perf_counter()
 
                 print("[TIMING] AI:", round(ai_end - ai_start, 3), "seconds")
@@ -555,9 +592,7 @@ class CallServer:
                                 app_call.appointment_status = "CHOOSING_ALTERNATIVE"
 
                             else:
-
-                                answer = ("I'm sorry, that time is not available, "
-                                          "and I could not find an alternative.")
+                                answer = generate_appointment_unavailable_response(app_call)
 
                 elif action == "APPOINTMENT_CONFIRMED":
 
@@ -566,18 +601,19 @@ class CallServer:
                     if appointment_created:
                         answer = generate_appointment_created_response(app_call)
                     else:
-                        answer = ("I'm sorry, that time is no longer available. "
-                                  "The appointment was not added to the calendar.")
+                        answer = generate_appointment_unavailable_response(app_call)
+
+
 
                 elif action == "CREATE_NOTE":
 
                     note_created = self.create_note(app_call)
 
-                    if note_created:
-                        answer = answer
-                    else:
+                    if not note_created:
                         answer = (
+
                             "I'm sorry, I was unable to save your message."
+
                         )
 
                 tts_start = time.perf_counter()
@@ -713,7 +749,9 @@ def ping_secretary_web():
             url = os.getenv("SECRETARYWEB_API_URL")
 
             if url:
-                requests.get(url, timeout=5)
+                health_url = url.rstrip("/") + "/health"
+                response = requests.get(health_url, timeout=5)
+                response.raise_for_status()
                 print("[RENDER] Ping sent.")
 
         except Exception as e:
